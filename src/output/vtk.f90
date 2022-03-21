@@ -6,6 +6,27 @@ module vtk
    public :: output_vtk_grid_ascii
    public :: output_vtk_grid_binary
 
+
+   interface
+! void output_vtk_polydata(
+!     const char*, 
+!     int, 
+!     const double*, 
+!     const double*, 
+!     const double*, 
+!     const double*)
+      subroutine c_output_vtk_polydata(filename,n,p,rho,ux,uy) bind(c)
+         use iso_c_binding, only: c_char, c_double, c_int
+         implicit none
+         character(kind=c_char), intent(in) :: filename(*)
+         integer(c_int), intent(in), value :: n
+         real(c_double), intent(in) :: p(2,n)
+         real(c_double), intent(in) :: rho(n)
+         real(c_double), intent(in) :: ux(n)
+         real(c_double), intent(in) :: uy(n)
+      end subroutine
+   end interface
+
 contains
 
    subroutine output_vtk_grid_ascii(filename,nx,ny,rho,ux,uy)
