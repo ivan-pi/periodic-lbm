@@ -167,9 +167,9 @@ module fvm_bardow
    real(wp), parameter :: cx(0:8) = [0, 1, 0, -1, 0, 1, -1, -1, 1]
    real(wp), parameter :: cy(0:8) = [0, 0, 1, 0, -1, 1, 1, -1, -1]
 
-   real(wp), parameter :: w0 = 4._wp/9._wp, &
-                          ws = 1._wp/9._wp, &
-                          wd = 1._wp/36._wp
+   real(wp), parameter :: w0 = 4._wp / 9._wp, &
+                          ws = 1._wp / 9._wp, &
+                          wd = 1._wp / 36._wp
 
    real(wp), parameter :: csqr = 1._wp/3._wp
    real(wp), parameter :: invcsqr = 1._wp/csqr
@@ -180,31 +180,28 @@ contains
       real(wp), intent(in) :: rho, ux, uy
       real(wp) :: feq(0:8)
 
-      real(wp) :: uxx, uyy, uxy, usqr, cu
+      real(wp) :: uxx, uyy, uxy, uxpy, uxmy
+      real(wp) :: indp
 
       uxx = ux*ux
       uyy = uy*uy
       uxy = ux*uy
 
-      usqr = uxx + uyy
+      indp = 1.0_wp - 1.5_wp * (uxx + uyy)
 
-      feq(0) = w0*rho*(1.0_wp - 1.5_wp*usqr)
-      feq(1) = ws*rho*(1.0_wp + 3.0_wp*ux + 4.5_wp*uxx - 1.5_wp*usqr)
-      feq(2) = ws*rho*(1.0_wp + 3.0_wp*uy + 4.5_wp*uyy - 1.5_wp*usqr)
-      feq(3) = ws*rho*(1.0_wp - 3.0_wp*ux + 4.5_wp*uxx - 1.5_wp*usqr)
-      feq(4) = ws*rho*(1.0_wp - 3.0_wp*uy + 4.5_wp*uyy - 1.5_wp*usqr)
+      feq(0) = w0*rho*(indp)
+      feq(1) = ws*rho*(indp + 3.0_wp*ux + 4.5_wp*uxx)
+      feq(2) = ws*rho*(indp + 3.0_wp*uy + 4.5_wp*uyy)
+      feq(3) = ws*rho*(indp - 3.0_wp*ux + 4.5_wp*uxx)
+      feq(4) = ws*rho*(indp - 3.0_wp*uy + 4.5_wp*uyy)
 
-      cu = ux + uy
-      feq(5) = wd*rho*(1.0_wp + 3.0_wp*cu + 4.5_wp*cu*cu - 1.5_wp*usqr)
+      uxpy = ux + uy
+      feq(5) = wd*rho*(indp + 3.0_wp*uxpy + 4.5_wp*uxpy*uxpy)
+      feq(7) = wd*rho*(indp - 3.0_wp*uxpy + 4.5_wp*uxpy*uxpy)
       
-      cu = uy - ux
-      feq(6) = wd*rho*(1.0_wp + 3.0_wp*cu + 4.5_wp*cu*cu - 1.5_wp*usqr)
-      
-      cu = -uy - ux
-      feq(7) = wd*rho*(1.0_wp + 3.0_wp*cu + 4.5_wp*cu*cu - 1.5_wp*usqr)
-      
-      cu = ux - uy
-      feq(8) = wd*rho*(1.0_wp + 3.0_wp*cu + 4.5_wp*cu*cu - 1.5_wp*usqr)
+      uxmy = ux - uy
+      feq(6) = wd*rho*(indp - 3.0_wp*uxmy + 4.5_wp*uxmy*uxmy)
+      feq(8) = wd*rho*(indp + 3.0_wp*uxmy + 4.5_wp*uxmy*uxmy)
 
    end function
 
@@ -347,13 +344,13 @@ contains
                rho = (((fs(5) + fs(7)) + (fs(6) + fs(8))) + &
                       ((fs(1) + fs(3)) + (fs(2) + fs(4)))) + fs(0)
 
-               invrho = 1.0_wp/rho
+               grho(y,x) = rho
 
                ! velocity
+               invrho = 1.0_wp/rho
                ux = invrho * (((fs(5) - fs(7)) + (fs(8) - fs(6))) + (fs(1) - fs(3)))
                uy = invrho * (((fs(5) - fs(7)) + (fs(6) - fs(8))) + (fs(2) - fs(4)))
 
-               grho(y,x) = rho
                gux(y,x) = ux
                guy(y,x) = uy
 
@@ -365,12 +362,14 @@ contains
 
    end subroutine
 
-
-
    subroutine collide_bgk(grid)
       class(lattice_grid), intent(inout) :: grid
 
-      call bgk_kernel(grid%nx, grid%ny,&
+!      call bgk_kernel(grid%nx, grid%ny,&
+!         grid%f(:,:,:,grid%inew), &
+!         grid%omega)
+
+      call bgk_kernel_cache(grid%nx, grid%ny,&
          grid%f(:,:,:,grid%inew), &
          grid%omega)
 
@@ -389,9 +388,11 @@ contains
 
          omegabar = 1.0_wp - omega
 
-         !$omp parallel do collapse(2) default(private) shared(f1,omega,omegabar)
-         do y = 1, ny
-            do x = 1, nx
+      !$omp parallel default(private) shared(f1,omega,omegabar,nx,ny)
+
+         !$omp do collapse(2) schedule(static)
+         do x = 1, nx
+            do y = 1, ny
 
             ! pull pdfs travelling in different directions
             fs = f1(y,x,:)
@@ -417,11 +418,109 @@ contains
 
             end do
          end do
-         !$omp end parallel do
+         !$omp end do
 
-      end subroutine
+      !$omp end parallel
 
-   end subroutine
+      end subroutine bgk_kernel
+
+
+      subroutine bgk_kernel_cache(nx,ny,f1,omega)
+         integer, intent(in) :: nx, ny
+         real(wp), intent(inout) :: f1(ny,nx,0:8)
+         real(wp), intent(in) :: omega
+
+         real(wp) :: rho(ny), invrho, ux(ny), uy(ny), indp(ny)
+         real(wp) :: fs(0:8)
+         real(wp) :: omegabar, omega_w0, omega_ws, omega_wd
+
+         real(wp), parameter :: one_third = 1.0_wp / 3.0_wp
+
+         real(wp) :: vel_trm_13, vel_trm_24
+         real(wp) :: vel_trm_57, vel_trm_68
+         real(wp) :: velxpy, velxmy
+
+         integer :: x, y
+
+
+      !$omp parallel default(private) shared(f1,omega,nx,ny)
+         
+         omegabar = 1.0_wp - omega
+
+         omega_w0 = 3.0_wp * omega * w0
+         omega_ws = 3.0_wp * omega * ws
+         omega_wd = 3.0_wp * omega * wd
+         
+         !$omp do schedule(static)
+         do x = 1, nx
+
+            do y = 1, ny
+               ! pull pdfs travelling in different directions
+               fs = f1(y,x,:)
+
+               ! density
+               rho(y) = (((fs(5) + fs(7)) + (fs(6) + fs(8))) + &
+                         ((fs(1) + fs(3)) + (fs(2) + fs(4)))) + fs(0)
+
+               invrho = 1.0_wp/rho(y)
+
+               ! velocity
+               ux(y) = invrho * (((fs(5) - fs(7)) + (fs(8) - fs(6))) + (fs(1) - fs(3)))
+               uy(y) = invrho * (((fs(5) - fs(7)) + (fs(6) - fs(8))) + (fs(2) - fs(4)))
+
+               indp(y) = one_third - 0.5_wp * (ux(y)**2 + uy(y)**2)
+
+               ! update direction 0
+               f1(y,x,0) = omegabar*fs(0) + omega_w0*rho(y)*indp(y)
+            end do
+
+            do y = 1, ny
+            
+               vel_trm_13 = indp(y) + 1.5_wp * ux(y) * ux(y)
+
+               f1(y,x,1) = omegabar*f1(y,x,1) + omega_ws * rho(y) * (vel_trm_13 + ux(y))
+               f1(y,x,3) = omegabar*f1(y,x,3) + omega_ws * rho(y) * (vel_trm_13 - ux(y))
+            
+            end do
+
+            do y = 1, ny
+               
+               vel_trm_24 = indp(y) + 1.5_wp * uy(y) * uy(y)
+
+               f1(y,x,2) = omegabar*f1(y,x,2) + omega_ws * rho(y) * (vel_trm_24 + uy(y))
+               f1(y,x,4) = omegabar*f1(y,x,4) + omega_ws * rho(y) * (vel_trm_24 - uy(y))
+            
+            end do
+
+            do y = 1, ny
+
+               velxpy = ux(y) + uy(y)
+               vel_trm_57 = indp(y) + 1.5_wp * velxpy * velxpy
+
+               f1(y,x,5) = omegabar*f1(y,x,5) + omega_wd * rho(y) * (vel_trm_57 + velxpy)
+               f1(y,x,7) = omegabar*f1(y,x,7) + omega_wd * rho(y) * (vel_trm_57 - velxpy)
+            
+            end do
+
+            do y = 1, ny
+               
+               velxmy = ux(y) - uy(y)
+               vel_trm_68 = indp(y) + 1.5_wp * velxmy * velxmy
+               
+               f1(y,x,6) = omegabar*f1(y,x,6) + omega_wd * rho(y) * (vel_trm_68 - velxmy)
+               f1(y,x,8) = omegabar*f1(y,x,8) + omega_wd * rho(y) * (vel_trm_68 + velxmy)
+            
+            end do
+
+         end do
+         !$omp end do
+
+      !$omp end parallel
+
+      end subroutine bgk_kernel_cache
+
+   end subroutine collide_bgk
+
 
    subroutine stream_fvm_bardow(grid)
 
@@ -452,14 +551,19 @@ contains
 
          real(wp), parameter :: p2 = 0.5_wp, p8 = 0.125_wp, p6 = 1._wp/6._wp
 
+      !$omp parallel default(private) shared(nx,ny,fold,fnew,dt)
+         
          ! copy rest populations
+         !$omp workshare
          fnew(:,:,0) = fold(:,:,0)
+         !$omp end workshare
 
          do q = 1, 8
          
             cxq = dt*cx(q)
             cyq = dt*cy(q)
 
+         !$omp do schedule(static)
          do x = 1, ny
 
             ! locate neighbor nodes
@@ -523,8 +627,11 @@ contains
 
             end do
          end do
+         !$omp end do
 
-         end do
+         end do ! q
+      
+      !$omp end parallel
 
       end subroutine
 
@@ -562,9 +669,13 @@ contains
          real(wp), parameter :: two_thirds = 2._wp/3._wp, one_sixth = 1._wp/6._wp
          real(wp), parameter :: five_sixths = 10._wp/12._wp, one_twelth = 1._wp/12._wp
 
-         ! copy rest populations
-         !$omp parallel default(private) shared(nx,ny,fold,fnew,dt)
+         ! wls parameters
+         real(wp), parameter :: one_third = 1._wp/3._wp
 
+
+      !$omp parallel default(private) shared(nx,ny,fold,fnew,dt)
+
+         ! copy rest populations
          !$omp workshare
          fnew(:,:,0) = fold(:,:,0)
          !$omp end workshare
@@ -574,11 +685,12 @@ contains
             cxq = dt*cx(q)
             cyq = dt*cy(q)
 
-            cxxq = cxq*cxq
-            cyyq = cyq*cyq
-            cxyq = 2*cxq*cyq
+            ! dt**2 is carried here
+            cxxq = 0.5_wp*cxq*cxq
+            cyyq = 0.5_wp*cyq*cyq
+            cxyq = cxq*cyq
 
-            !$omp do
+            !$omp do schedule(static)
             do x = 1, nx
 
                ! locate neighbor nodes
@@ -601,15 +713,63 @@ contains
                   fsw = fold(ym1, xm1, q)
                   fse = fold(ym1, xp1, q)
 
-                  ! first derivatives
-                  dfx = p2*(fe - fw)
-                  dfy = p2*(fn - fs)
 
-                  ! second derivatives
-                  dfxx = fe - 2*fc + fw
-                  dfyy = fn - 2*fc + fs
-                  dfxy = p4*(fne - fse - fnw + fsw)
+#ifdef FDM_WLS
+                  !> weighted least squares
+                  !
+                  !  no weight function
+                  !  appears to be unstable
+                  !  
+                  dfx = one_sixth*((fne - fnw) + (fe - fw) + (fse - fsw))
+                  dfy = one_sixth*((fne - fse) + (fn - fs) + (fnw - fsw))
 
+                  dfxx = one_third*(fne - 2*fn + fnw) + one_third*(fe - 2*fc + fw) + one_third*(fse - 2*fs + fsw)
+                  dfyy = one_third*(fne - 2*fe + fse) + one_third*(fn - 2*fc + fs) + one_third*(fnw - 2*fw + fsw)
+                  dfxy = 0.25_wp*(fne - fnw + fsw - fse)
+#elif FDM_WLS_GAUSS_V1
+                  !> weighted least squares
+                  !
+                  !  gaussian weight, scaled to farthest node
+                  !  
+                  block
+                     real(wp), parameter :: p1s = 0.2880584423829145035434_wp, &
+                                            p1d = 0.1059707788085427065949_wp
+
+                     real(wp), parameter :: p2c = -1.152233769531658458263_wp, &
+                                            p2d1 = 0.5761168847658292291314_wp, &
+                                            p2d2 = -0.4238831152341712149578_wp, &
+                                            p2d = 0.2119415576170855242122_wp
+
+                     dfx = p1s*(fe - fw) + p1d*(fne - fnw) + p1d*(fse - fsw)
+                     dfy = p1s*(fn - fs) + p1d*(fne - fse) + p1d*(fnw - fsw)
+
+                     dfxx = p2c*fc + p2d1*(fe + fw) + p2d2*(fn + fs) + p2d*(fne + fnw + fsw + fse)
+                     dfyy = p2c*fc + p2d2*(fe + fw) + p2d1*(fn + fs) + p2d*(fne + fnw + fsw + fse)
+                     dfxy = 0.25_wp*(fne - fnw + fsw - fse)
+                  end block
+#elif FDM_WLS_GAUSS_V2
+                  !> weighted least squares
+                  !
+                  !  gaussian weight, scaled to closest node
+                  !  match the values in the older rbff code
+                  !  
+                  block
+                     real(wp), parameter :: p1s = 0.3934930210807994210853_wp, &
+                                            p1d = 0.05325348945960039354075_wp
+
+                     real(wp), parameter :: p2c = -1.573972084323197018207_wp, &
+                                            p2d1 = 0.7869860421615988421706_wp, &
+                                            p2d2 = -0.2130139578384016019186_wp, &
+                                            p2d = 0.1065069789192007732037_wp
+
+                     dfx = p1s*(fe - fw) + p1d*(fne - fnw) + p1d*(fse - fsw)
+                     dfy = p1s*(fn - fs) + p1d*(fne - fse) + p1d*(fnw - fsw)
+
+                     dfxx = p2c*fc + p2d1*(fe + fw) + p2d2*(fn + fs) + p2d*(fne + fnw + fsw + fse)
+                     dfyy = p2c*fc + p2d2*(fe + fw) + p2d1*(fn + fs) + p2d*(fne + fnw + fsw + fse)
+                     dfxy = 0.25_wp*(fne - fnw + fsw - fse)
+                  end block
+#elif FDM_ISO
                   !> isotropic derivatives, taken from
                   ! 
                   !   Kumar, A. (2004). Isotropic finite-differences. Journal of
@@ -617,17 +777,27 @@ contains
                   !
                   !   the mixed derivative is already isotropic    
                   !
-                  !dfx = p2*(one_sixth*(fne - fnw) + two_thirds*(fe - fw) + one_sixth*(fse - fsw))
-                  !dfy = p2*(one_sixth*(fne - fse) + two_thirds*(fn - fs) + one_sixth*(fnw - fsw))
+                  dfx = p2*(one_sixth*(fne - fnw) + two_thirds*(fe - fw) + one_sixth*(fse - fsw))
+                  dfy = p2*(one_sixth*(fne - fse) + two_thirds*(fn - fs) + one_sixth*(fnw - fsw))
 
-                  !dfxx = one_twelth*(fne - 2*fn + fnw) + five_sixths*dfxx + one_twelth*(fse - 2*fs + fsw)
-                  !dfyy = one_twelth*(fne - 2*fe + fse) + five_sixths*dfyy + one_twelth*(fnw - 2*fw + fsw)
+                  dfxx = one_twelth*(fne - 2*fn + fnw) + five_sixths*(fe - 2*fc + fw) + one_twelth*(fse - 2*fs + fsw)
+                  dfyy = one_twelth*(fne - 2*fe + fse) + five_sixths*(fn - 2*fc + fs) + one_twelth*(fnw - 2*fw + fsw)
+                  dfxy = 0.25_wp*(fne - fse - fnw + fsw)
+#else 
+                  ! first derivatives
+                  dfx = p2*(fe - fw)
+                  dfy = p2*(fn - fs)
 
+                  ! second derivatives
+                  dfxx = fe - 2*fc + fw
+                  dfyy = fn - 2*fc + fs
+                  dfxy = 0.25_wp*(fne - fse - fnw + fsw)
+#endif
                   !
                   ! perform streaming
                   !
                   fnew(y,x,q) = fc - cxq*dfx - cyq*dfy + &
-                     p2*(cxxq*dfxx + cxyq*dfxy + cyyq*dfyy)
+                     (cxxq*dfxx + cxyq*dfxy + cyyq*dfyy)
 
                end do
             end do
@@ -663,13 +833,18 @@ contains
 
          real(wp) :: du1, du2, fu, fc, fd
 
-         real(wp) :: p2 = 0.5_wp/sqrt(2._wp)
+         real(wp), parameter :: p2 = 0.5_wp/sqrt(2._wp)
+
+      !$omp parallel default(private) shared(nx,ny,fold,fnew,dt)
 
          ! copy rest populations
+         !$omp workshare
          fnew(:,:,0) = fold(:,:,0)
+         !$omp end workshare
 
          ! Direction 1
          !
+         !$omp do schedule(static)
          do x = 1, ny
             xp1 = mod(x, nx) + 1
             xm1 = mod(nx + x - 2, nx) + 1
@@ -684,9 +859,11 @@ contains
                fnew(y,x,1) = fc + dt*(0.5_wp*dt*du2 - du1)
             end do
          end do
+         !$omp end do
 
          ! Direction 2
          !
+         !$omp do schedule(static)
          do x = 1, ny
             do y = 1, nx
                yp1 = mod(y, ny) + 1
@@ -701,9 +878,11 @@ contains
                fnew(y,x,2) = fc + dt*(0.5_wp*dt*du2 - du1)
             end do
          end do
+         !$omp end do
 
          ! Direction 3
          !
+         !$omp do schedule(static)
          do x = 1, ny
             xp1 = mod(x, nx) + 1
             xm1 = mod(nx + x - 2, nx) + 1
@@ -718,10 +897,14 @@ contains
                fnew(y,x,3) = fc + dt*(0.5_wp*dt*du2 - du1)
             end do
          end do
+         !$omp end do
 
          ! Direction 4
          !
+         !$omp do schedule(static)
          do x = 1, ny
+            xp1 = mod(x, nx) + 1
+            xm1 = mod(nx + x - 2, nx) + 1
             do y = 1, nx
                yp1 = mod(y, ny) + 1
                ym1 = mod(ny + y - 2, ny) + 1
@@ -735,9 +918,11 @@ contains
                fnew(y,x,4) = fc + dt*(0.5_wp*dt*du2 - du1)
             end do
          end do
+         !$omp end do
 
          ! Direction 5
          !
+         !$omp do schedule(static)
          do x = 1, ny
             ! locate neighbor nodes
             xp1 = mod(x, nx) + 1
@@ -755,9 +940,11 @@ contains
                fnew(y,x,5) = fc + dt*(0.5_wp*dt*du2 - du1)
             end do
          end do
+         !$omp end do
 
          ! Direction 6
          !
+         !$omp do schedule(static)
          do x = 1, ny
             ! locate neighbor nodes
             xp1 = mod(x, nx) + 1
@@ -775,9 +962,11 @@ contains
                fnew(y,x,6) = fc + dt*(0.5_wp*dt*du2 - du1)
             end do
          end do
+         !$omp end do
 
          ! Direction 7
          !
+         !$omp do schedule(static)
          do x = 1, ny
             ! locate neighbor nodes
             xp1 = mod(x, nx) + 1
@@ -795,9 +984,11 @@ contains
                fnew(y,x,7) = fc + dt*(0.5_wp*dt*du2 - du1)
             end do
          end do
+         !$omp end do
 
          ! Direction 8
          !
+         !$omp do schedule(static)
          do x = 1, ny
             ! locate neighbor nodes
             xp1 = mod(x, nx) + 1
@@ -815,6 +1006,10 @@ contains
                fnew(y,x,8) = fc + dt*(0.5_wp*dt*du2 - du1)
             end do
          end do
+         !$omp end do
+
+      !$omp end parallel
+
       end subroutine
 
    end subroutine
@@ -969,10 +1164,12 @@ program main
    use fvm_bardow
    use taylor_green, only: taylor_green_t, pi
 
+   !$ use omp_lib, only: omp_get_wtime
+
    implicit none
 
    integer, parameter :: nx = 64, ny = 64
-   integer, parameter :: nprint = 10000
+   integer, parameter :: nprint = 50000
    integer :: step, nsteps
 
    type(taylor_green_t) :: tg
@@ -982,6 +1179,12 @@ program main
    real(wp) :: kx, ky, umax, nrm
 
    real(wp) :: t, tmax
+
+   real(wp) :: dt_over_tau
+   character(len=64) :: arg
+
+   integer, parameter :: dp = kind(1.0d0)
+   real(dp) :: sbegin, send
 
    call alloc_grid(grid, nx, ny)
 
@@ -999,9 +1202,14 @@ program main
    ! nu = (umax * L) / Re
    nu = (umax * real(nx,wp)) / 100._wp
    
-   ! tau = nu * cs**2
-   tau = nu / 3._wp
-   dt = 40._wp*tau
+   ! tau = nu / cs**2, cs**2 = 1/3
+   tau = 3.0_wp * nu 
+
+   ! read value for dt/tau
+   call get_command_argument(1,arg)
+   read(arg,*) dt_over_tau
+
+   dt = dt_over_tau*tau
 
    !cfl = 0.1_wp
    !dt = cfl/sqrt(2.0_wp)
@@ -1033,6 +1241,8 @@ program main
    call output_grid_txt(grid,step=0)
    call grid%logger(step=0)
 
+   !$ sbegin = omp_get_wtime()
+
    time: do step = 1, nsteps
 
       call perform_step(grid)
@@ -1053,10 +1263,13 @@ program main
       end if
    end do time
 
+   !$ send = omp_get_wtime()
+   !$ print *, "MLUPS ", (real(nx,wp) * real(ny,wp) * real(step,wp) * 1.e-6_wp) / (send - sbegin)
 
    ! calculate average L2-norm
    nrm = calc_L2_norm(tg, grid, t)
    print *, "L2-norm = ", nrm
+   print *, "Final time = ", t
 
    call dealloc_grid(grid)
 
