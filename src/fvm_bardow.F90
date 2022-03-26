@@ -1,104 +1,8 @@
-module precision
-
-   implicit none
-   private
-
-   public :: wp
-
-   integer, parameter :: sp = kind(1.0)
-   integer, parameter :: dp = kind(1.0d0)
-
-   integer, parameter :: wp = dp
-
-end module
-
-module interp
-
-   use precision, only: wp
-   implicit none
-
-contains 
-
-
-   !   u1 ------- u2
-   !   |          |
-   !   |          |
-   !   |          |
-   !   |          |
-   !   u3 ---o--- u4
-   !   |    /| ry |
-   !   |   @--    |
-   !   |    rx    |
-   !   |          |
-   !   u5 ------- u6
-
-   function interp_vbox6(u1,u2,u3,u4,u5,u6,rx,ry) result(uinterp)
-      real(wp), intent(in) :: u1, u2, u3, u4, u5, u6
-      real(wp), intent(in) :: rx, ry
-
-      real(wp) :: uinterp
-
-      real(wp) :: tx
-      real(wp) :: v1, v2, v3
-      real(wp) :: h1, h2, h3
-
-      tx = 0.5_wp - rx
-
-      ! interpolate linearly in first direction
-      v1 = u1 + (u2 - u1)*tx
-      v2 = u3 + (u4 - u3)*tx
-      v3 = u5 + (u6 - u5)*tx
-
-      ! interpolate quadratically along second direction
-      
-      h1 = 0.5_wp*ry*(ry + 1)
-      h2 = (ry + 1)*(ry - 1)
-      h3 = 0.5_wp*ry*(ry - 1)
-
-      uinterp = h1*v1 + h2*v2 + h3*v3
-
-   end function
-
-
-   !   u5 ------- u3 ------- u1
-   !   |          |          |
-   !   |          |          |
-   !   |          o          |
-   !   |        / |          |
-   !   |       @--|          |
-   !   u6 ------- u4 ------- u2
-
-   function interp_hbox6(u1,u2,u3,u4,u5,u6,rx,ry) result(uinterp)
-      real(wp), intent(in) :: u1, u2, u3, u4, u5, u6
-      real(wp), intent(in) :: rx, ry
-
-      real(wp) :: uinterp
-
-      real(wp) :: ty
-      real(wp) :: v1, v2, v3
-      real(wp) :: h1, h2, h3
-
-      ty = 0.5_wp - ry
-
-      ! interpolate linearly in first direction
-      v1 = u2 + (u1 - u2)*ty
-      v2 = u4 + (u3 - u4)*ty
-      v3 = u6 + (u5 - u6)*ty
-
-      ! interpolate quadratically along second direction
-      h1 = 0.5_wp*rx*(rx + 1)
-      h2 = (rx + 1)*(rx - 1)
-      h3 = 0.5_wp*rx*(rx - 1)
-
-      uinterp = h1*v1 + h2*v2 + h3*v3
-
-   end function
-
-end module
-
 module fvm_bardow
 
    use precision
+   use vtk, only: output_vtk_grid_ascii, output_vtk_structuredPoints
+
    implicit none
    private
 
@@ -112,7 +16,9 @@ module fvm_bardow
    public :: set_properties
    public :: perform_step
    public :: update_macros
-   public :: output_grid_txt
+   
+   public :: output_grid_txt, output_vtk
+
    public :: set_pdf_to_equilibrium
 
 
@@ -132,7 +38,7 @@ module fvm_bardow
       real(wp), allocatable :: ux(:,:), uy(:,:)
       
       real(wp) :: nu, dt
-      real(wp) :: omega
+      real(wp) :: omega, trt_magic
       real(wp) :: csqr
       
       integer :: iold, inew
@@ -145,7 +51,8 @@ module fvm_bardow
       character(len=:), allocatable :: logfile
       procedure(gridlog_interface), pointer, pass(grid) :: logger => null()
       integer :: logunit
-
+   contains
+      procedure :: set_output_folder
    end type
 
    abstract interface
@@ -255,9 +162,10 @@ contains
       end subroutine
    end subroutine
 
-   subroutine set_properties(grid, nu, dt)
+   subroutine set_properties(grid, nu, dt, magic)
       type(lattice_grid), intent(inout) :: grid
       real(wp), intent(in) :: nu, dt
+      real(wp), optional :: magic
 
       real(wp) :: tau
 
@@ -268,6 +176,16 @@ contains
       tau = invcsqr*nu
 
       grid%omega = dt/(tau + 0.5_wp*dt)
+
+      if (present(magic)) then
+         grid%trt_magic = magic
+      else
+         ! bgk by default
+         !grid%trt_magic = (2.0_wp - grid%omega)**2 / (4.0_wp * (grid%omega)**2)
+         grid%trt_magic = (tau/dt)**2
+      end if
+
+      print *, "trt magic = ", grid%trt_magic
 
    end subroutine
 
@@ -1058,294 +976,59 @@ contains
    end subroutine
 
 
-end module
-
-module taylor_green
-
-   use precision, only: wp
-   use fvm_bardow, only: lattice_grid
-   
-   implicit none
-   private
-
-   public :: taylor_green_t
-   public :: pi
-
-   type :: taylor_green_t
-      integer :: nx, ny
-      real(wp) :: kx, ky
-      real(wp) :: umax, nu
-      real(wp) :: td
-   contains
-      procedure :: eval => taylor_green_eval
-      procedure :: decay_time => taylor_green_decay_time
-   end type
-
-   real(wp), parameter :: pi = 4._wp*atan(1._wp)
-
-
-   interface taylor_green_t
-      module procedure :: taylor_green_t_constructor
-   end interface
-
-contains
-
-   function taylor_green_t_constructor(nx,ny,kx,ky,umax,nu) result(this)
-      integer, intent(in) :: nx, ny
-      real(wp), intent(in) :: kx, ky, umax, nu
-      type(taylor_green_t) :: this
-
-      this%nx = nx
-      this%ny = ny
-      this%kx = kx
-      this%ky = ky
-      this%umax = umax
-      this%nu = nu
-      this%td = 1._wp/(nu*(kx**2 + ky**2))
-   end function
-
-   function taylor_green_decay_time(self) result(tc)
-      class(taylor_green_t), intent(in) :: self
-      real(wp) :: tc
-      tc = self%td
-   end function
-
-   subroutine taylor_green_eval(self,t,p,ux,uy,S)
-      class(taylor_green_t), intent(in) :: self
-      real(wp), intent(in) :: t
-      real(wp), intent(out) :: p(:,:), ux(:,:), uy(:,:)
-      real(wp), intent(out), optional :: S(self%ny,self%nx,3)
-
-      integer :: x, y
-      real(wp) :: xx, yy
-      real(wp), parameter :: rho0 = 1.0_wp
-
-      associate(umax=>self%umax, &
-                kx => self%kx, &
-                ky=>self%ky, &
-                td => self%td)
-
-      do x = 1, self%nx
-         xx = (x - 1) + 0.5_wp
-         do y = 1, self%nx
-            yy = (y - 1) + 0.5_wp
-
-            ux(y,x) = -umax*sqrt(ky/kx)*cos(kx*xx)*sin(ky*yy)*exp(-t/td)
-            uy(y,x) =  umax*sqrt(kx/ky)*sin(kx*xx)*cos(ky*yy)*exp(-t/td)
-            p(y,x) = -0.25_wp*(umax**2)*((ky/kx)*cos(2._wp*kx*xx) + (kx/ky)*cos(2._wp*ky*yy))*exp(-2._wp*t/td)
-
-            if (present(S)) then
-              S(y,x,1) = umax*sqrt(kx*ky)*sin(kx*xx)*sin(ky*yy)*exp(-t/td)
-              S(y,x,2) = 0.5_wp*umax*(sqrt(kx**3/ky) - sqrt(ky**3/kx))*cos(kx*xx)*cos(ky*yy)*exp(-t/td)
-              S(y,x,3) = -S(y,x,1)
-            end if
-         end do
-      end do
-
-      end associate
-   end subroutine
-
-!    kykx = ky/kx
-!    kxky = kx/ky
-
-!    pfx = -u0*sqrt(kykx)
-!    pfy =  u0*sqrt(kxky)
-
-!    do i = 1, n
-!      ux(i) = pfx*cos(kx*x(i))*sin(ky*y(i))*exp(-t/tc)
-!      uy(i) = pfy*sin(kx*x(i))*cos(ky*y(i))*exp(-t/tc)
-!      p(i) = -0.25_wp*u0**2*(kykx*cos(2*kx*x(i)) + kxky*cos(2*ky*y(i)))*exp(-2.0_wp*t/tc)
-!    end do
-
-end module
-
-program main
-
-   use fvm_bardow
-   use taylor_green, only: taylor_green_t, pi
-
-   !$ use omp_lib, only: omp_get_wtime
-
-   implicit none
-
-   integer, parameter :: nx = 64, ny = 64
-   integer, parameter :: nprint = 50000
-   integer :: step, nsteps
-
-   type(taylor_green_t) :: tg
-
-   type(lattice_grid) :: grid
-   real(wp) :: cfl, dt, nu, tau
-   real(wp) :: kx, ky, umax, nrm
-
-   real(wp) :: t, tmax
-
-   real(wp) :: dt_over_tau
-   character(len=64) :: arg
-
-   integer, parameter :: dp = kind(1.0d0)
-   real(dp) :: sbegin, send
-
-   call alloc_grid(grid, nx, ny)
-
-   grid%filename = "results"
-   grid%foldername = "taylor_green"
-
-   grid%collision => collide_bgk
-   grid%streaming => stream_fdm_bardow
-
-   grid%logger => my_logger
-
-   ! umax = Mach * cs
-   umax = 0.01_wp / sqrt(3._wp)
-
-   ! nu = (umax * L) / Re
-   nu = (umax * real(nx,wp)) / 100._wp
-   
-   ! tau = nu / cs**2, cs**2 = 1/3
-   tau = 3.0_wp * nu 
-
-   ! read value for dt/tau
-   call get_command_argument(1,arg)
-   read(arg,*) dt_over_tau
-
-   dt = dt_over_tau*tau
-
-   !cfl = 0.1_wp
-   !dt = cfl/sqrt(2.0_wp)
-   cfl = sqrt(2._wp)*dt
-   print *, "dt/tau = ", dt/tau
-   print *, "cfl = ", cfl
-
-   call set_properties(grid, nu, dt)
-
-   print *, "omega = ", grid%omega
-
-   ! ---- prepare flow case ----
-
-   kx = 2*pi/real(nx,wp)
-   ky = 2*pi/real(ny,wp)
-
-   tg = taylor_green_t(nx,ny,kx,ky,umax,nu)
-   print *, "umax = ", umax
-   print *, "tc   = ", tg%td
-   call write_gnuplot_include()
-
-   tmax = log(2._wp)*tg%decay_time()
-   nsteps = int(1.1_wp*tmax/dt)
-   print*, "nsteps = ", nsteps
-
-   t = 0._wp
-   call apply_initial_condition(tg, grid)
-
-   call output_grid_txt(grid,step=0)
-   call grid%logger(step=0)
-
-   !$ sbegin = omp_get_wtime()
-
-   time: do step = 1, nsteps
-
-      call perform_step(grid)
-      t = t + dt
-
-      if (mod(step,nprint) == 0) then
-         print *, step
-         call update_macros(grid)
-         call output_grid_txt(grid,step)
-         call grid%logger(step)
-      end if
-
-      if (t >= tmax) then
-         call update_macros(grid)
-         call output_grid_txt(grid,step)
-         call grid%logger(step)
-         exit time
-      end if
-   end do time
-
-   !$ send = omp_get_wtime()
-   !$ print *, "MLUPS ", (real(nx,wp) * real(ny,wp) * real(step,wp) * 1.e-6_wp) / (send - sbegin)
-
-   ! calculate average L2-norm
-   nrm = calc_L2_norm(tg, grid, t)
-   print *, "L2-norm = ", nrm
-   print *, "Final time = ", t
-
-   call dealloc_grid(grid)
-
-contains
-
-   subroutine apply_initial_condition(case, grid)
-      type(taylor_green_t), intent(in) :: case
-      type(lattice_grid), intent(inout) :: grid
-
-      real(wp), parameter :: rho0 = 1.0_wp
-
-      call case%eval(t=0.0_wp, &
-                   p=grid%rho, &
-                   ux=grid%ux, &
-                   uy=grid%uy)
-
-      ! convert pressure to lattice density
-      grid%rho = grid%rho/grid%csqr + rho0
-
-      call set_pdf_to_equilibrium(grid)
-
-   end subroutine
-
-   subroutine my_logger(grid,step)
-      class(lattice_grid), intent(in) :: grid
-      integer, intent(in) :: step
-
-      write(grid%logunit, *) step, step*dt, maxval(hypot(grid%ux,grid%uy))
-      flush(grid%logunit)
-
-   end subroutine
-
-   subroutine write_gnuplot_include()
-
-      integer :: unit
-
-      open(newunit=unit,file="lattice_grid_log.incl",status='unknown')
-
-      write(unit,*) "dt = ", dt
-      write(unit,*) "umax = ", umax
-      write(unit,*) "tc = ", tg%td
-
-      close(unit)
-   end subroutine
-
-
-   function calc_L2_norm(case, grid, t) result(nrm)
-      type(taylor_green_t), intent(in) :: case
+   subroutine output_vtk(grid, step, binary)
       type(lattice_grid), intent(in) :: grid
-      real(wp), intent(in) :: t
-      real(wp) :: nrm
+      integer, intent(in), optional :: step
+      logical, intent(in), optional :: binary
 
-      real(wp), allocatable :: pa(:,:), uxa(:,:), uya(:,:)
-      real(wp) :: above, below
+      logical :: binary_
+      character(len=64) :: istr
+      character(len=:), allocatable :: fullname
 
-      allocate(pa, mold=grid%rho) ! not needed
-      allocate(uxa, mold=grid%ux)
-      allocate(uya, mold=grid%uy)
+      binary_ = .false.
+      if (present(binary)) binary_ = binary
 
-      call case%eval(t=t, &
-                   p=pa, &
-                   ux=uxa, &
-                   uy=uya)
+      istr = ''
+      if (present(step)) then
+         write(istr,'(I0.9)') step
+      end if
 
-      above = norm2(hypot(grid%ux-uxa, grid%uy-uya))
-      below = norm2(hypot(uxa, uya))
-      nrm = above/below
+      fullname = ''
+      if (allocated(grid%foldername)) then
+         fullname = trim(grid%foldername) // '/'
+      end if
+      fullname = fullname // grid%filename // trim(istr) // '.vtk'
 
-      ! # Code used in the Python version
-      ! def L2_error(u,v,ua,va):
-      !     return np.sqrt(np.sum((u-ua)**2 + (v-va)**2)/np.sum(ua**2 + va**2))
+      if (binary_) then
+         return
+      else
+         !call output_vtk_grid_ascii(fullname,grid%nx,grid%ny, &
+         !   grid%rho,grid%ux,grid%uy)
 
-      !above = sum((grid%ux - uxa)**2 + (grid%uy - uya)**2)
-      !below = sum(uxa**2 + uya**2)
-      !nrm = sqrt(above/below)
+         call output_vtk_structuredPoints(fullname,grid%nx,grid%ny, &
+            grid%rho,grid%ux,grid%uy)
+      end if
 
-   end function
+   end subroutine
 
-end program
+   subroutine set_output_folder(grid,foldername)
+      class(lattice_grid), intent(inout) :: grid
+      character(len=*) :: foldername
+
+      integer :: istat
+
+      call execute_command_line("mkdir -p "//trim(foldername), &
+         exitstat=istat, wait=.true.)
+
+      if (istat /= 0) then
+         write(*,'(A)') "[set_output_folder] error creating directory "//grid%foldername
+         error stop
+      end if
+
+      grid%foldername = foldername
+
+   end subroutine
+
+end module
+
+
