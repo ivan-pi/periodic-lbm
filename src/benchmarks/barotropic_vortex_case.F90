@@ -20,7 +20,8 @@ module barotropic_vortex_case
       real(wp) :: eps         !> Strength of vortex
       real(wp) :: rho0 = 1.0_wp
    contains
-      procedure :: eval => eval_vortex_case
+      procedure :: eval => eval_vortex_case, &
+                           eval_vortex_case_unstructured
    end type
 
 contains
@@ -34,8 +35,9 @@ contains
       real(wp) :: xl, yl, xr, yr, rsqr
       real(wp) :: Rcsqr, esqr
       real(wp), parameter :: half = 1._wp/2._wp
+      integer :: x, y
 
-      !$omp parallel default(private) shared(rho,ux,uy,case)
+      !$omp parallel default(private) shared(case,nx,ny,rho,ux,uy)
 
       Rcsqr = case%Rc2**2
       esqr = case%eps**2
@@ -66,6 +68,52 @@ contains
             !   0.125_wp*(esqr/csqr)**2/gamma * exp(-half*rsqr/Rcsqr))
 
          end do
+      end do
+      !$omp end do 
+
+      !$omp end parallel
+
+   end subroutine
+
+   subroutine eval_vortex_case_unstructured(case,n,xy,rho,ux,uy)
+      class(vortex_case_t), intent(in) :: case
+      integer, intent(in) :: n
+      real(wp), intent(in) :: xy(:,:) ! shape [2,n]
+      real(wp), intent(out) :: rho(:) ! shape [n]
+      real(wp), intent(out) :: ux(:), uy(:) ! shape[n]
+
+      real(wp) :: xr, yr, rsqr
+      real(wp) :: Rcsqr, esqr
+      real(wp), parameter :: half = 1._wp/2._wp
+      integer :: i
+
+      !$omp parallel default(private) shared(case,n,xy,rho,ux,uy)
+
+      Rcsqr = case%Rc2**2
+      esqr = case%eps**2
+
+      !$omp do schedule(static)
+      do i = 1, n
+
+         xr = xy(1,i) - case%xc
+         yr = xy(2,i) - case%yc
+
+         rsqr = xr*xr + yr*yr
+
+         ! Convected vortex, Eqs. (3) and (4)
+         uy(i) = u0 - case%eps * (yr/case%Rc) * exp(-half*rsqr/Rcsqr)
+         ux(i) =      case%eps * (xr/case%Rc) * exp(-half*rsqr/Rcsqr)
+
+         ! Barotopic density initialization, Eq. (20)
+         rho(i) = case%rho0 * exp(-half*(esqr/csqr) * exp(-rsqr/Rcsqr))
+
+         ! First order Taylor expansion, Eq. (21)
+         !rho(i) = case%rho0 * (1 - half*esqr/csqr * exp(-rsqr/Rcsqr))
+
+         ! Second order Taylor expansion, Eq. (22)
+         !rho(i) = case%rho0 * (1 - half*esqr/csqr * exp(-rsqr/Rcsqr) + &
+         !   0.125_wp*(esqr/csqr)**2/gamma * exp(-half*rsqr/Rcsqr))
+
       end do
       !$omp end do 
 
