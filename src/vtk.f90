@@ -63,15 +63,15 @@ contains
       write(unit_, '(A,I5)') "CELL_DATA ", nx*ny
       write(unit_, '(A)') "SCALARS density float 1"
       write(unit_, '(A)') "LOOKUP_TABLE default"
-      do j = 1, ny
-         do i = 1, nx
-            write(unit_, '(ES12.5)') rho(i,j)
+      do i = 1, nx
+         do j = 1, ny
+            write(unit_, '(ES12.5)') rho(j,i)
          end do
       end do
       write(unit_, *) "VECTORS velocity float"
-      do j = 1, ny
-         do i = 1, nx
-            write(unit_, '(3ES12.5)') ux(i,j), uy(i,j), 0.0_wp
+      do i = 1, nx
+         do j = 1, ny
+            write(unit_, '(3ES12.5)') ux(j,i), uy(j,i), 0.0_wp
          end do
       end do
 
@@ -168,17 +168,17 @@ contains
 
       write(unit_, '(A)') "SCALARS Density float 1"
       write(unit_, '(A)') "LOOKUP_TABLE default"
-      do j = 1, ny
-         do i = 1, nx
-            write(unit_, '(ES15.8E2)') rho(i,j)
+      do i = 1, nx
+         do j = 1, ny
+            write(unit_, '(ES15.8E2)') rho(j,i)
          end do
       end do
 
       write(unit_, *)
       write(unit_, '(A)') "VECTORS Velocity float"
-      do j = 1, ny
-         do i = 1, nx
-            write(unit_, '(3(ES15.8E2,1X))') ux(i,j), uy(i,j), 0.0_wp
+      do i = 1, nx
+         do j = 1, ny
+            write(unit_, '(3(ES15.8E2,1X))') ux(j,i), uy(j,i), 0.0_wp
          end do
       end do
 
