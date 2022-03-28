@@ -41,22 +41,32 @@ contains
    subroutine collide_trt(grid)
       class(lattice_grid), intent(inout) :: grid
 
+      integer :: ld
       real(wp) :: lambda_even, lambda_odd
 
       lambda_even = grid%omega
       lambda_odd  = lambda_d(grid%omega, grid%trt_magic)
 
-      call trt_cache_friendly(grid%nx, grid%ny,&
-         grid%f(:,:,:,grid%inew), &
+      ld = size(grid%f,1)
+
+#if SPLIT
+      call trt_split(grid%nx, grid%ny, &
+         grid%f(:,:,:,grid%inew), ld, &
          lambda_even, lambda_odd)
+#else
+      call trt_naive(grid%nx, grid%ny, &
+         grid%f(:,:,:,grid%inew), ld, &
+         lambda_even, lambda_odd)
+#endif
 
    contains
 
-      subroutine trt_kernel(nx,ny,f1,lambda_e,lambda_d)
-         integer, intent(in) :: nx, ny
-         real(wp), intent(inout) :: f1(ny,nx,0:8)
+      subroutine trt_naive(nx,ny,f1,ldf1,lambda_e,lambda_d)
+         integer, intent(in) :: nx, ny, ldf1
+         real(wp), intent(inout) :: f1(ldf1,nx,0:8)
          real(wp), intent(in) :: lambda_e, lambda_d
 
+         
          real(wp) :: rho, invrho, velX, velY
 
          ! relaxation parameter variables
@@ -68,17 +78,21 @@ contains
          real(wp) :: sym_N_S, asym_N_S
          real(wp) :: sym_E_W, asym_E_W
 
+         real(wp) :: velX2, velY2
          real(wp) :: velXPY, velXMY
          real(wp) :: vC, vE, vN, vW, vS, vNE, vNW, vSW, vSE
-         real(wp) :: dst(0:8), feq_common
+         real(wp) :: feq_common
 
          integer :: x, y
+
+         !$omp parallel default(private) shared(f1,lambda_e,lambda_d,nx,ny)
 
          lambda_e_scaled = 0.5_wp * lambda_e   ! 0.5 times the usual value
          lambda_d_scaled = 0.5_wp * lambda_d   ! ... due to the way of calculations
 
-         do y = 1, ny
-            do x = 1, nx  
+         !$omp do schedule(static)
+         do x = 1, nx  
+            do y = 1, ny
 
             ! pull pdfs
             vC  = f1(y,x,0)
@@ -92,63 +106,69 @@ contains
             vSE = f1(y,x,8)
 
             !
-            ! macroscopic values
+            ! macroscopic values (incompressible equilibrium)
             !
 
             rho = (((vNE + vSW) + (vNW + vSE)) + &
                    ((vE + vW) + (vN + vS))) + vC
 
-            invrho = 1.0_wp! / rho
+            velX = (((vNE - vSW) + (vSE - vNW)) + (vE - vW))
+            velY = (((vNE - vSW) + (vNW - vSE)) + (vN - vS))
 
-            velX = invrho * (((vNE - vSW) + (vSE - vNW)) + (vE - vW))
-            velY = invrho * (((vNE - vSW) + (vNW - vSE)) + (vN - vS))
-
+            velX2 = velX*velX
+            velY2 = velY*velY
+            
             !
             ! compute new populations
             !
 
-            feq_common = rho - 1.5_wp*(velX*velX + velY*velY)
+            feq_common = rho - 1.5_wp*(velX2 + velY2)
 
-            dst(0) = vC * (1.0_wp - lambda_e) + lambda_e * t0 * feq_common
+            f1(y,x,0) = vC * (1.0_wp - lambda_e) + lambda_e * t0 * feq_common
 
             velXPY = velX + velY
 
             sym_NE_SW  = lambda_e_scaled * ( vNE + vSW - fac2 * velXPY * velXPY - t2x2 * feq_common )
             asym_NE_SW = lambda_d_scaled * ( vNE - vSW - 3.0_wp * t2x2 * velXPY )
-            dst(5) = vNE - sym_NE_SW - asym_NE_SW
-            dst(7) = vSW - sym_NE_SW + asym_NE_SW
+            f1(y,x,5) = vNE - sym_NE_SW - asym_NE_SW
+            f1(y,x,7) = vSW - sym_NE_SW + asym_NE_SW
 
             velXMY = velX - velY
 
             sym_SE_NW  = lambda_e_scaled * ( vSE + vNW - fac2 * velXMY * velXMY - t2x2 * feq_common )
             asym_SE_NW = lambda_d_scaled * ( vSE - vNW - 3.0_wp * t2x2 * velXMY ) 
-            dst(8) = vSE - sym_SE_NW - asym_SE_NW
-            dst(6) = vNW - sym_SE_NW + asym_SE_NW
+            f1(y,x,8) = vSE - sym_SE_NW - asym_SE_NW
+            f1(y,x,6) = vNW - sym_SE_NW + asym_SE_NW
 
-            sym_N_S  = lambda_e_scaled * ( vN + vS - fac1 * velY * velY - t1x2 * feq_common )
+            sym_N_S  = lambda_e_scaled * ( vN + vS - fac1 * velY2 - t1x2 * feq_common )
             asym_N_S = lambda_d_scaled * ( vN - vS - 3.0_wp * t1x2 * velY )
-            dst(2) = vN - sym_N_S - asym_N_S
-            dst(4) = vS - sym_N_S + asym_N_S
+            f1(y,x,2) = vN - sym_N_S - asym_N_S
+            f1(y,x,4) = vS - sym_N_S + asym_N_S
 
-            sym_E_W  = lambda_e_scaled * ( vE + vW - fac1 * velX * velX - t1x2 * feq_common )
+            sym_E_W  = lambda_e_scaled * ( vE + vW - fac1 * velX2 - t1x2 * feq_common )
             asym_E_W = lambda_d_scaled * ( vE - vW - 3.0_wp * t1x2 * velX )
 
-            dst(1) = vE - sym_E_W - asym_E_W
-            dst(3) = vW - sym_E_W + asym_E_W
-
-            f1(y,x,:) = dst
+            f1(y,x,1) = vE - sym_E_W - asym_E_W
+            f1(y,x,3) = vW - sym_E_W + asym_E_W
 
             end do
          end do
+         !$omp end do
+
+         !$omp end parallel
 
       end subroutine
 
-      subroutine trt_cache_friendly(nx,ny,f1,lambda_e,lambda_d)
-         integer, intent(in) :: nx, ny
-         real(wp), intent(inout) :: f1(ny,nx,0:8)
+      subroutine trt_split(nx,ny,f1,ldf1,lambda_e,lambda_d)
+         integer, intent(in) :: nx, ny, ldf1
+         real(wp), intent(inout) :: f1(ldf1,nx,0:8)
+
          real(wp), intent(in) :: lambda_e, lambda_d
 
-         real(wp) :: rho(ny), invrho, velX(ny), velY(ny)
+         real(wp) :: rho(ny), velX(ny), velY(ny)
+         !dir$ attributes align:64 :: rho
+         !dir$ attributes align:64 :: velX
+         !dir$ attributes align:64 :: velY
 
          ! relaxation parameter variables
          real(wp) :: lambda_e_scaled, lambda_d_scaled
@@ -161,9 +181,13 @@ contains
 
          real(wp) :: velXPY, velXMY
          real(wp) :: vC, vE, vN, vW, vS, vNE, vNW, vSW, vSE
-         real(wp) :: dst(0:8), feq_common(ny)
+         
+         real(wp) :: feq_common(ny)
+         !dir$ attributes align: 64 :: feq_common
 
          integer :: x, y
+
+         !dir$ assume_aligned f1: 64
 
       !$omp parallel default(private) shared(f1,lambda_e,lambda_d,nx,ny)
 
@@ -171,8 +195,7 @@ contains
          lambda_d_scaled = 0.5_wp * lambda_d   ! ... due to the way of calculations
 
          !$omp do schedule(static)
-         do x = 1, ny  
-            
+         do x = 1, nx
             do y = 1, ny
 
                ! pull pdfs
@@ -187,63 +210,77 @@ contains
                vSE = f1(y,x,8)
 
                !
-               ! macroscopic values
+               ! macroscopic values (incompressible equilibrium)
                !
 
                rho(y) = (((vNE + vSW) + (vNW + vSE)) + &
                       ((vE + vW) + (vN + vS))) + vC
 
-               invrho = 1.0_wp! / rho
-
-               velX(y) = invrho * (((vNE - vSW) + (vSE - vNW)) + (vE - vW))
-               velY(y) = invrho * (((vNE - vSW) + (vNW - vSE)) + (vN - vS))
-
+               velX(y) = (((vNE - vSW) + (vSE - vNW)) + (vE - vW))
+               velY(y) = (((vNE - vSW) + (vNW - vSE)) + (vN - vS))
                !
                ! compute new populations
                !
 
                feq_common(y) = rho(y) - 1.5_wp*(velX(y)*velX(y) + velY(y)*velY(y))
-
-               dst(0) = vC * (1.0_wp - lambda_e) + lambda_e * t0 * feq_common(y)
+               f1(y,x,0) = vC * (1.0_wp - lambda_e) + lambda_e * t0 * feq_common(y)
             
             end do
 
             do y = 1, ny
+
                vNE = f1(y,x,5)
                vSW = f1(y,x,7)
+         
                velXPY = velX(y) + velY(y)
+
                sym_NE_SW  = lambda_e_scaled * ( vNE + vSW - fac2 * velXPY * velXPY - t2x2 * feq_common(y) )
                asym_NE_SW = lambda_d_scaled * ( vNE - vSW - 3.0_wp * t2x2 * velXPY )
-               f1(y,x,5) = vNE - sym_NE_SW - asym_NE_SW
-               f1(y,x,7) = vSW - sym_NE_SW + asym_NE_SW
+
+               f1(y,x,5) = f1(y,x,5) - sym_NE_SW - asym_NE_SW
+               f1(y,x,7) = f1(y,x,7) - sym_NE_SW + asym_NE_SW
+
             end do
 
             do y = 1, ny
+               
                vNW = f1(y,x,6)
                vSE = f1(y,x,8)
+
                velXMY = velX(y) - velY(y)
-               sym_SE_NW  = lambda_e_scaled * ( vSE + vNW - fac2 * velXMY * velXMY - t2x2 * feq_common(y) )
+               
+                sym_SE_NW = lambda_e_scaled * ( vSE + vNW - fac2 * velXMY * velXMY - t2x2 * feq_common(y) )
                asym_SE_NW = lambda_d_scaled * ( vSE - vNW - 3.0_wp * t2x2 * velXMY ) 
-               f1(y,x,8) = vSE - sym_SE_NW - asym_SE_NW
-               f1(y,x,6) = vNW - sym_SE_NW + asym_SE_NW
+               
+               f1(y,x,8) = f1(y,x,8) - sym_SE_NW - asym_SE_NW
+               f1(y,x,6) = f1(y,x,6) - sym_SE_NW + asym_SE_NW
+
             end do
 
             do y = 1, ny
+
                vN = f1(y,x,2)
                vS = f1(y,x,4)
-               sym_N_S  = lambda_e_scaled * ( vN + vS - fac1 * velY(y) * velY(y) - t1x2 * feq_common(y) )
+               
+                sym_N_S = lambda_e_scaled * ( vN + vS - fac1 * velY(y) * velY(y) - t1x2 * feq_common(y) )
                asym_N_S = lambda_d_scaled * ( vN - vS - 3.0_wp * t1x2 * velY(y) )
-               f1(y,x,2) = vN - sym_N_S - asym_N_S
-               f1(y,x,4) = vS - sym_N_S + asym_N_S
+               
+               f1(y,x,2) = f1(y,x,2) - sym_N_S - asym_N_S
+               f1(y,x,4) = f1(y,x,4) - sym_N_S + asym_N_S
+
             end do
 
             do y = 1, ny
+
                vE = f1(y,x,1)
                vW = f1(y,x,3)
-               sym_E_W  = lambda_e_scaled * ( vE + vW - fac1 * velX(y) * velX(y) - t1x2 * feq_common(y) )
+               
+                sym_E_W = lambda_e_scaled * ( vE + vW - fac1 * velX(y) * velX(y) - t1x2 * feq_common(y) )
                asym_E_W = lambda_d_scaled * ( vE - vW - 3.0_wp * t1x2 * velX(y) )
-               f1(y,x,1) = vE - sym_E_W - asym_E_W
-               f1(y,x,3) = vW - sym_E_W + asym_E_W
+               
+               f1(y,x,1) = f1(y,x,1) - sym_E_W - asym_E_W
+               f1(y,x,3) = f1(y,x,3) - sym_E_W + asym_E_W
+
             end do
          end do
          !$omp end do
