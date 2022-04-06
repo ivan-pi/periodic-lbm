@@ -12,6 +12,7 @@ module shear_layer_case
       real(wp) :: U0
       real(wp) :: k
       real(wp) :: delta
+      real(wp) :: rho0 = 1.0_wp
    contains
       procedure :: eval => eval_shear_layer_unstructured, &
                            eval_shear_layer_grid
@@ -36,12 +37,14 @@ contains
             ! Scale y-coordinate to region [0,1)
             yd = (real(y-1,wp) + 0.5_wp)/case%length
 
-            uy(i) = case%U0 * case%delta * sin(2*pi*(xd + 0.25_wp))
+            uy(y,x) = case%U0 * case%delta * sin(2*pi*(xd + 0.25_wp))
             if (yd <= 0.5_wp) then
-               ux(i) = case%U0 * tanh(case%k * (yd - 0.25_wp))
+               ux(y,x) = case%U0 * tanh(case%k * (yd - 0.25_wp))
             else
-               ux(i) = case%U0 * tanh(case%k * (0.75_wp - yd))
+               ux(y,x) = case%U0 * tanh(case%k * (0.75_wp - yd))
             end if
+
+            rho(y,x) = case%rho0
 
          end do
       end do
@@ -70,6 +73,8 @@ contains
          else
             ux(i) = case%U0 * tanh(case%k * (0.75_wp - yd))
          end if
+
+         rho(i) = case%rho0
 
       end do
 
