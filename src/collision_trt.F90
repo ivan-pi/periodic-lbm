@@ -10,9 +10,9 @@ module collision_trt
    public :: collide_trt
 
    ! common prefactors for calculating the equilibrium parts
-   real(wp), parameter :: t0 = 4.0_wp/9.0_wp
-   real(wp), parameter :: t1x2 = 1.0_wp/9.0_wp * 2.0_wp
-   real(wp), parameter :: t2x2 = 1.0_wp/36.0_wp * 2.0_wp
+   real(wp), parameter :: t0 = 4.0_wp / 9.0_wp
+   real(wp), parameter :: t1x2 = ( 1.0_wp / 9.0_wp  ) * 2.0_wp
+   real(wp), parameter :: t2x2 = ( 1.0_wp / 36.0_wp ) * 2.0_wp
 
    ! speed of sound related factors
    real(wp), parameter :: inv2csq2 = 1.0_wp / ( 2.0_wp * ( 1.0_wp / 3.0_wp ) * ( 1.0_wp / 3.0_wp ) )
@@ -128,24 +128,24 @@ contains
 
             velXPY = velX + velY
 
-            sym_NE_SW  = lambda_e_scaled * ( vNE + vSW - fac2 * velXPY * velXPY - t2x2 * feq_common )
+             sym_NE_SW = lambda_e_scaled * ( vNE + vSW - fac2 * velXPY * velXPY - t2x2 * feq_common )
             asym_NE_SW = lambda_d_scaled * ( vNE - vSW - 3.0_wp * t2x2 * velXPY )
             f1(y,x,5) = vNE - sym_NE_SW - asym_NE_SW
             f1(y,x,7) = vSW - sym_NE_SW + asym_NE_SW
 
             velXMY = velX - velY
 
-            sym_SE_NW  = lambda_e_scaled * ( vSE + vNW - fac2 * velXMY * velXMY - t2x2 * feq_common )
+             sym_SE_NW = lambda_e_scaled * ( vSE + vNW - fac2 * velXMY * velXMY - t2x2 * feq_common )
             asym_SE_NW = lambda_d_scaled * ( vSE - vNW - 3.0_wp * t2x2 * velXMY ) 
             f1(y,x,8) = vSE - sym_SE_NW - asym_SE_NW
             f1(y,x,6) = vNW - sym_SE_NW + asym_SE_NW
 
-            sym_N_S  = lambda_e_scaled * ( vN + vS - fac1 * velY2 - t1x2 * feq_common )
+             sym_N_S = lambda_e_scaled * ( vN + vS - fac1 * velY2 - t1x2 * feq_common )
             asym_N_S = lambda_d_scaled * ( vN - vS - 3.0_wp * t1x2 * velY )
             f1(y,x,2) = vN - sym_N_S - asym_N_S
             f1(y,x,4) = vS - sym_N_S + asym_N_S
 
-            sym_E_W  = lambda_e_scaled * ( vE + vW - fac1 * velX2 - t1x2 * feq_common )
+             sym_E_W = lambda_e_scaled * ( vE + vW - fac1 * velX2 - t1x2 * feq_common )
             asym_E_W = lambda_d_scaled * ( vE - vW - 3.0_wp * t1x2 * velX )
 
             f1(y,x,1) = vE - sym_E_W - asym_E_W
