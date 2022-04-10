@@ -1,5 +1,7 @@
 module vtk
 
+   use precision, only: wp
+
    implicit none
    private
 
@@ -8,9 +10,17 @@ module vtk
 
    public :: output_vtk_structuredPoints
 
+   character(*), parameter :: FMT_REAL = &
+#if PRECISION_SP
+    !> Format string for single precision real numbers
+    FMT_REAL = '(ES15.8E2)'
+#else
+    !> Format string for double precision real numbers
+    FMT_REAL = '(ES24.16E3)'
+#endif
 
-   integer, parameter :: wp = kind(1.0d0)
-   character(*), parameter :: FMT_REAL = '(es15.8e2)'
+   character(*), parameter :: FMT_VECTOR = '(3'//FMT_REAL//')'
+
 
    interface
 ! void output_vtk_polydata(
@@ -51,27 +61,27 @@ contains
       write(unit_, '(A,3(I0,:,1X))') "DIMENSIONS ", nx+1, ny+1, 2
       write(unit_, '(A,I0,A)') "X_COORDINATES ", nx+1, " float"
       do i = 1, nx+1
-         write(unit_, '(ES12.5)') real(i-1,wp)
+         write(unit_, FMT_REAL) real(i-1,wp)
       end do
       write(unit_, '(A,I0,A)') "Y_COORDINATES ", ny+1, " float"
       do j = 1, ny+1
-         write(unit_, '(ES12.5)') real(j-1,wp)
+         write(unit_, FMT_REAL) real(j-1,wp)
       end do
       write(unit_, '(A)') "Z_COORDINATES 2 float"
-      write(unit_, '(ES12.5)') 0.0_wp
-      write(unit_, '(ES12.5)') 1.0_wp
-      write(unit_, '(A,I5)') "CELL_DATA ", nx*ny
-      write(unit_, '(A)') "SCALARS density float 1"
+      write(unit_, FMT_REAL) 0.0_wp
+      write(unit_, FMT_REAL) 1.0_wp
+      write(unit_, '(A,I0)') "CELL_DATA ", nx*ny
+      write(unit_, '(A)') "SCALARS Density float 1"
       write(unit_, '(A)') "LOOKUP_TABLE default"
-      do i = 1, nx
-         do j = 1, ny
-            write(unit_, '(ES12.5)') rho(j,i)
+      do j = 1, ny
+         do i = 1, nx
+            write(unit_, FMT_REAL) rho(j,i)
          end do
       end do
-      write(unit_, *) "VECTORS velocity float"
-      do i = 1, nx
-         do j = 1, ny
-            write(unit_, '(3ES12.5)') ux(j,i), uy(j,i), 0.0_wp
+      write(unit_, *) "VECTORS Velocity float"
+      do j = 1, ny
+         do i = 1, nx
+            write(unit_, FMT_VECTOR) ux(j,i), uy(j,i), 0.0_wp
          end do
       end do
 
@@ -151,14 +161,14 @@ contains
 
       open(newunit=unit_,file=filename)
 
-
       write(unit_, '(A)') "# vtk DataFile Version 3.0"
       write(unit_, '(A)') "fluid"
       write(unit_, '(A)') "ASCII"
       write(unit_, '(A)') "DATASET STRUCTURED_POINTS"
+      
       write(unit_, '(A,3(I0,1X))') "DIMENSIONS ", nx+1, ny+1, 2
-      write(unit_, '(A,3(ES15.8E2,1X))') "ORIGIN ", 0.0_wp, 0.0_wp, 0.0_wp
-      write(unit_, '(A,3(ES15.8E2,1X))') "SPACING ", 1.0_wp, 1.0_wp, 1.0_wp
+      write(unit_, '(A,'// FMT_VECTOR //')') "ORIGIN  ", 0.0_wp, 0.0_wp, 0.0_wp
+      write(unit_, '(A,'// FMT_VECTOR //')') "SPACING ", 1.0_wp, 1.0_wp, 1.0_wp
       
       !
       ! Dataset attributes
@@ -168,17 +178,17 @@ contains
 
       write(unit_, '(A)') "SCALARS Density float 1"
       write(unit_, '(A)') "LOOKUP_TABLE default"
-      do i = 1, nx
-         do j = 1, ny
-            write(unit_, '(ES15.8E2)') rho(j,i)
+      do j = 1, ny
+         do i = 1, nx
+            write(unit_, FMT_REAL) rho(j,i)
          end do
       end do
 
       write(unit_, *)
       write(unit_, '(A)') "VECTORS Velocity float"
-      do i = 1, nx
-         do j = 1, ny
-            write(unit_, '(3(ES15.8E2,1X))') ux(j,i), uy(j,i), 0.0_wp
+      do j = 1, ny
+         do i = 1, nx
+            write(unit_, FMT_VECTOR) ux(j,i), uy(j,i), 0.0_wp
          end do
       end do
 
