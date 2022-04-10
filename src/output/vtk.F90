@@ -10,17 +10,16 @@ module vtk
 
    public :: output_vtk_structuredPoints
 
-   character(*), parameter :: FMT_REAL = &
 #if PRECISION_SP
-    !> Format string for single precision real numbers
-    FMT_REAL = '(ES15.8E2)'
+   !> Format string for single precision real numbers
+   character(*), parameter :: FMT_REAL = '(ES15.8E2)'
 #else
-    !> Format string for double precision real numbers
-    FMT_REAL = '(ES24.16E3)'
+   !> Format string for double precision real numbers
+   character(*), parameter :: FMT_REAL = '(ES24.16E3)'
 #endif
 
+   !> Format string for a vector triplet
    character(*), parameter :: FMT_VECTOR = '(3'//FMT_REAL//')'
-
 
    interface
 ! void output_vtk_polydata(
@@ -165,7 +164,7 @@ contains
       write(unit_, '(A)') "fluid"
       write(unit_, '(A)') "ASCII"
       write(unit_, '(A)') "DATASET STRUCTURED_POINTS"
-      
+
       write(unit_, '(A,3(I0,1X))') "DIMENSIONS ", nx+1, ny+1, 2
       write(unit_, '(A,'// FMT_VECTOR //')') "ORIGIN  ", 0.0_wp, 0.0_wp, 0.0_wp
       write(unit_, '(A,'// FMT_VECTOR //')') "SPACING ", 1.0_wp, 1.0_wp, 1.0_wp
