@@ -2,7 +2,8 @@ module fvm_bardow
 
    use precision
    use vtk, only: output_vtk_grid_ascii, output_vtk_structuredPoints
-
+   use output_gnuplot, only: output_gnuplot_grid
+   
    implicit none
    private
 
@@ -14,18 +15,20 @@ module fvm_bardow
    public :: alloc_grid, dealloc_grid
 
    public :: set_properties
-   public :: perform_step
+   public :: perform_step, perform_triple_step
+   
    public :: update_macros
    
    public :: output_grid_txt, output_vtk
 
    public :: set_pdf_to_equilibrium
 
-
    public :: collide_bgk
    public :: stream_fdm_bardow
    public :: stream_fvm_bardow
    public :: stream_fdm_sofonea
+
+   public :: cx, cy, csqr
 
    character(*), parameter :: FMT_REAL_SP = '(es15.8e2)'
 
@@ -34,14 +37,17 @@ module fvm_bardow
       integer :: nx, ny
 
       real(wp), allocatable :: f(:,:,:,:)
+      !dir$ attributes align: 64:: f
+
       real(wp), allocatable :: rho(:,:)
       real(wp), allocatable :: ux(:,:), uy(:,:)
+      !dir$ attributes align: 64:: rho, ux, uy
       
-      real(wp) :: nu, dt
+      real(wp) :: nu, dt, tau
       real(wp) :: omega, trt_magic
       real(wp) :: csqr
       
-      integer :: iold, inew
+      integer :: iold, inew, imid
       
       procedure(collision_interface), pointer, pass(grid) :: collision => null()
       procedure(streaming_interface), pointer, pass(grid) :: streaming => null()
@@ -71,8 +77,8 @@ module fvm_bardow
       end subroutine
    end interface
 
-   real(wp), parameter :: cx(0:8) = [0, 1, 0, -1, 0, 1, -1, -1, 1]
-   real(wp), parameter :: cy(0:8) = [0, 0, 1, 0, -1, 1, 1, -1, -1]
+   real(wp), parameter :: cx(0:8) = [real(wp) :: 0, 1, 0, -1, 0, 1, -1, -1, 1]
+   real(wp), parameter :: cy(0:8) = [real(wp) :: 0, 0, 1, 0, -1, 1, 1, -1, -1]
 
    real(wp), parameter :: w0 = 4._wp / 9._wp, &
                           ws = 1._wp / 9._wp, &
@@ -113,24 +119,43 @@ contains
    end function
 
 
-   subroutine alloc_grid(grid,nx,ny,log)
+   subroutine alloc_grid(grid,nx,ny,nf,log)
       type(lattice_grid), intent(out) :: grid
+      
       integer, intent(in) :: nx, ny
+      integer, intent(in), optional :: nf
       logical, intent(in), optional :: log
 
+      integer :: nf_
       logical :: log_
       character(len=:), allocatable :: logfile_
+      integer :: ny_, rmd
 
       grid%nx = nx
       grid%ny = ny
 
-      allocate(grid%f(ny,nx,0:8,2))
+      ! Round to closest dimension of 16
+      ny_ = ny
+      rmd = mod(ny_, 16)      
+      if (rmd > 0) ny_ = ny_ + (16 - rmd)
+
+      ! Number of pdf fields
+      nf_ = 2
+      if (present(nf)) nf_ = nf
+
+      allocate(grid%f(ny_,nx,0:8,nf_))
       allocate(grid%rho(ny,nx))
       allocate(grid%ux(ny,nx))
       allocate(grid%uy(ny,nx))
 
       grid%inew = 1
       grid%iold = 2
+
+      if (nf_ > 2) then
+         grid%imid = 3
+      else
+         grid%imid = -1
+      end if
 
       log_ = .true.
       if (present(log)) log_ = log
@@ -175,6 +200,7 @@ contains
       grid%csqr = csqr
       tau = invcsqr*nu
 
+      grid%tau = tau
       grid%omega = dt/(tau + 0.5_wp*dt)
 
       if (present(magic)) then
@@ -198,18 +224,17 @@ contains
 
       associate( nx => grid%nx, &
                  ny => grid%ny, &
-                 pdf => grid%f(:,:,:,grid%iold), &
                  rho => grid%rho, &
                  ux => grid%ux, &
-                 uy => grid%uy)
+                 uy => grid%uy, &
+                 pdf => grid%f(:,:,:,grid%iold))
 
-
-      do y = 1, ny
-         do x = 1, nx
+      do x = 1, nx
+         do y = 1, ny
 
             rho_ = rho(y,x)
-            ux_ = ux(y,x)
-            uy_ = uy(y,x)
+             ux_ =  ux(y,x)
+             uy_ =  uy(y,x)
 
             pdf(y,x,:) = equilibrium(rho_, ux_, uy_)
 
@@ -218,13 +243,19 @@ contains
 
       end associate
 
+!      if (size(grid%f,4) > 2) then
+!         grid%f(:,:,:,grid%imid) = grid%f(:,:,:,grid%iold)
+!         grid%f(:,:,:,grid%inew) = grid%f(:,:,:,grid%iold)
+!         call grid%collision()
+!      end if
+
    end subroutine
 
    subroutine perform_step(grid)
       type(lattice_grid), intent(inout) :: grid
 
-      call grid%streaming()
-      call grid%collision()
+      call grid%streaming()  ! write from iold to inew
+      call grid%collision()  ! update inew in place
 
       swap: block
          integer :: itmp
@@ -235,32 +266,57 @@ contains
 
    end subroutine
 
+   subroutine perform_triple_step(grid)
+      type(lattice_grid), intent(inout) :: grid
+
+      call grid%streaming()  ! write from iold to inew
+
+      ! Store pre-collision PDF's
+      grid%f(:,:,:,grid%iold) = grid%f(:,:,:,grid%inew)
+
+      call grid%collision()  ! update inew in place
+
+      swap: block
+         integer :: itmp
+         itmp = grid%iold
+         grid%iold = grid%inew
+         grid%inew = grid%imid
+         grid%imid = itmp     
+      end block swap
+
+   end subroutine
+
+
    subroutine update_macros(grid)
       type(lattice_grid), intent(inout) :: grid
 
-      call update_macros_kernel(grid%nx, grid%nx, &
+      integer :: ld
+
+      ld = size(grid%f,1)
+
+      call update_macros_kernel(grid%nx, grid%ny, ld, &
          grid%f(:,:,:,grid%inew), &
          grid%rho, grid%ux, grid%uy)
 
    contains
 
-      subroutine update_macros_kernel(nx,ny,f,grho,gux,guy)
-         integer, intent(in) :: nx, ny
-         real(wp), intent(in) :: f(ny, nx, 0:8)
-         real(wp), intent(out), dimension(ny,nx) :: grho, gux, guy
+      subroutine update_macros_kernel(nx,ny,ld,f,grho,gux,guy)
+         integer, intent(in) :: nx, ny, ld
+         real(wp), intent(in) :: f(ld, nx, 0:8)
+         real(wp), intent(inout), dimension(ny,nx) :: grho, gux, guy
 
          real(wp) :: rho, invrho, ux, uy, fs(0:8)
          integer :: x, y
 
-         !$omp parallel do collapse(2) default(private) shared(nx,ny,f,rho,gux,guy)
+         !$omp parallel do collapse(2) default(private) shared(nx,ny,f,grho,gux,guy)
          do x = 1, nx
             do y = 1, ny
 
                fs = f(y,x,:)
 
                ! density
-               rho = (((fs(5) + fs(7)) + (fs(6) + fs(8))) + &
-                      ((fs(1) + fs(3)) + (fs(2) + fs(4)))) + fs(0)
+               rho = fs(0) + (((fs(5) + fs(7)) + (fs(6) + fs(8))) + &
+                      ((fs(1) + fs(3)) + (fs(2) + fs(4)))) 
 
                grho(y,x) = rho
 
@@ -282,20 +338,25 @@ contains
 
    subroutine collide_bgk(grid)
       class(lattice_grid), intent(inout) :: grid
+      integer :: ld
 
-!      call bgk_kernel(grid%nx, grid%ny,&
-!         grid%f(:,:,:,grid%inew), &
-!         grid%omega)
+      ld = size(grid%f,1)
 
-      call bgk_kernel_cache(grid%nx, grid%ny,&
+#if SPLIT
+      call bgk_kernel_cache(grid%nx, grid%ny, ld, &
          grid%f(:,:,:,grid%inew), &
          grid%omega)
+#else
+      call bgk_kernel(grid%nx, grid%ny, ld, &
+         grid%f(:,:,:,grid%inew), &
+         grid%omega)
+#endif
 
    contains
 
-      subroutine bgk_kernel(nx,ny,f1,omega)
-         integer, intent(in) :: nx, ny
-         real(wp), intent(inout) :: f1(ny,nx,0:8)
+      subroutine bgk_kernel(nx,ny,ld,f1,omega)
+         integer, intent(in) :: nx, ny, ld
+         real(wp), intent(inout) :: f1(ld,nx,0:8)
          real(wp), intent(in) :: omega
 
          real(wp) :: rho, invrho, ux, uy
@@ -342,10 +403,9 @@ contains
 
       end subroutine bgk_kernel
 
-
-      subroutine bgk_kernel_cache(nx,ny,f1,omega)
-         integer, intent(in) :: nx, ny
-         real(wp), intent(inout) :: f1(ny,nx,0:8)
+      subroutine bgk_kernel_cache(nx,ny,ld,f1,omega)
+         integer, intent(in) :: nx,ny,ld
+         real(wp), intent(inout) :: f1(ld,nx,0:8)
          real(wp), intent(in) :: omega
 
          real(wp) :: rho(ny), invrho, ux(ny), uy(ny), indp(ny)
@@ -445,19 +505,22 @@ contains
       use interp, only: interp_hbox6, interp_vbox6
 
       class(lattice_grid), intent(inout) :: grid
+      integer :: ld
+
+      ld = size(grid%f,1)
 
       call fvm_bardow_kernel( &
-         grid%nx, grid%ny, &
+         grid%nx, grid%ny, ld, &
          grid%f(:,:,:,grid%iold), &
          grid%f(:,:,:,grid%inew), &
          grid%dt)
 
    contains
 
-      subroutine fvm_bardow_kernel(nx,ny,fold,fnew,dt)
-         integer, intent(in) :: nx, ny
-         real(wp), intent(in) :: fold(ny,nx,0:8)
-         real(wp), intent(inout) :: fnew(ny,nx,0:8)
+      subroutine fvm_bardow_kernel(nx,ny,ld,fold,fnew,dt)
+         integer, intent(in) :: nx, ny, ld
+         real(wp), intent(in) :: fold(ld,nx,0:8)
+         real(wp), intent(inout) :: fnew(ld,nx,0:8)
          real(wp), intent(in) :: dt
 
          integer :: q, x, y
@@ -473,7 +536,7 @@ contains
          
          ! copy rest populations
          !$omp workshare
-         fnew(:,:,0) = fold(:,:,0)
+         fnew(1:ny,:,0) = fold(1:ny,:,0)
          !$omp end workshare
 
          do q = 1, 8
@@ -558,18 +621,22 @@ contains
    subroutine stream_fdm_bardow(grid)
       class(lattice_grid), intent(inout) :: grid
 
+      integer :: ld 
+
+      ld = size(grid%f,1)
+
       call fdm_bardow_kernel( &
-         grid%nx, grid%ny, &
+         grid%nx, grid%ny, ld, &
          grid%f(:,:,:,grid%iold), &
          grid%f(:,:,:,grid%inew), &
          grid%dt)
 
    contains
 
-      subroutine fdm_bardow_kernel(nx, ny,fold,fnew,dt)
-         integer, intent(in) :: nx, ny
-         real(wp), intent(in) :: fold(ny,nx,0:8)
-         real(wp), intent(inout) :: fnew(ny,nx,0:8)
+      subroutine fdm_bardow_kernel(nx,ny,ld,fold,fnew,dt)
+         integer, intent(in) :: nx, ny,ld
+         real(wp), intent(in) :: fold(ld,nx,0:8)
+         real(wp), intent(inout) :: fnew(ld,nx,0:8)
          real(wp), intent(in) :: dt
 
          integer :: x, y, q
@@ -630,7 +697,6 @@ contains
                   fnw = fold(yp1, xm1, q)
                   fsw = fold(ym1, xm1, q)
                   fse = fold(ym1, xp1, q)
-
 
 #ifdef FDM_WLS
                   !> weighted least squares
@@ -732,18 +798,22 @@ contains
    subroutine stream_fdm_sofonea(grid)
       class(lattice_grid), intent(inout) :: grid
 
+      integer :: ld
+
+      ld = size(grid%f,1)
+
       call fdm_sofonea_kernel( &
-         grid%nx, grid%ny, &
+         grid%nx, grid%ny, ld, &
          grid%f(:,:,:,grid%iold), &
          grid%f(:,:,:,grid%inew), &
          grid%dt)
 
    contains
 
-      subroutine fdm_sofonea_kernel(nx, ny,fold,fnew,dt)
-         integer, intent(in) :: nx, ny
-         real(wp), intent(in) :: fold(ny,nx,0:8)
-         real(wp), intent(inout) :: fnew(ny,nx,0:8)
+      subroutine fdm_sofonea_kernel(nx,ny,ld,fold,fnew,dt)
+         integer, intent(in) :: nx, ny, ld
+         real(wp), intent(in) :: fold(ld,nx,0:8)
+         real(wp), intent(inout) :: fnew(ld,nx,0:8)
          real(wp), intent(in) :: dt
 
          integer :: x, y
@@ -932,7 +1002,7 @@ contains
 
    end subroutine
 
-   subroutine output_grid_txt(grid, step)
+   subroutine output_gnuplot(grid, step)
       type(lattice_grid), intent(in) :: grid
       integer, intent(in), optional :: step
 
@@ -960,18 +1030,9 @@ contains
 
       fullname = fullname//'/'//grid%filename//trim(istr)//'.txt'
       
-      open(newunit=unit,file=fullname)
-
-      do x = 1, grid%nx
-         xx = (x - 1) + 0.5_wp
-         do y = 1, grid%ny
-            yy = (y - 1) + 0.5_wp
-            write(unit,'(*(1X,'//FMT_REAL_SP//'))') xx, yy, grid%rho(y,x), grid%ux(y,x), grid%uy(y,x)
-         end do
-         write(unit,*)
-      end do
-
-      close(unit)
+      call output_gnuplot_grid(fullname, &
+         grid%nx,grid%ny, &
+         grid%rho,grid%ux,grid%uy)
 
    end subroutine
 
