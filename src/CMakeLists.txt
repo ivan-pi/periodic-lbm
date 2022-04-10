@@ -8,6 +8,7 @@ set(SRC
 	collision_bgk_improved.f90
 	collision_trt.F90
 	collision_regularized.F90
+	vorticity.f90
 	output/vtk.F90
 	output/gnuplot.F90
 	benchmarks/barotropic_vortex_case.F90
