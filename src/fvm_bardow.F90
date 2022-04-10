@@ -3,7 +3,7 @@ module fvm_bardow
    use precision
    use vtk, only: output_vtk_grid_ascii, output_vtk_structuredPoints
    use output_gnuplot, only: output_gnuplot_grid
-   
+
    implicit none
    private
 
@@ -37,11 +37,16 @@ module fvm_bardow
       integer :: nx, ny
 
       real(wp), allocatable :: f(:,:,:,:)
-      !dir$ attributes align: 64:: f
+      !dir$ attributes align: 64::f
 
-      real(wp), allocatable :: rho(:,:)
-      real(wp), allocatable :: ux(:,:), uy(:,:)
-      !dir$ attributes align: 64:: rho, ux, uy
+      !> Macroscopic fields (contiguous storage) for simple output
+      real(wp), allocatable :: mf(:,:,:)
+      !dir$ attributes align: 64::mf
+
+      !> Views of the macroscopic fields, for easier referencing
+      real(wp), pointer :: rho(:,:) => null()
+      real(wp), pointer ::  ux(:,:) => null()
+      real(wp), pointer ::  uy(:,:) => null()
       
       real(wp) :: nu, dt, tau
       real(wp) :: omega, trt_magic
@@ -144,19 +149,33 @@ contains
       if (present(nf)) nf_ = nf
 
       allocate(grid%f(ny_,nx,0:8,nf_))
-      allocate(grid%rho(ny,nx))
-      allocate(grid%ux(ny,nx))
-      allocate(grid%uy(ny,nx))
 
+      allocate(grid%mf(ny,nx,3))
+
+      !allocate(grid%rho(ny,nx))
+      !allocate(grid%ux(ny,nx))
+      !allocate(grid%uy(ny,nx))
+      !
+      ! Associate pointer components
+      !
+      grid%rho => grid%mf(:,:,1)
+      grid%ux  => grid%mf(:,:,2)
+      grid%uy  => grid%mf(:,:,3)
+
+      !
+      ! Initialize field pointers
+      !
       grid%inew = 1
       grid%iold = 2
-
       if (nf_ > 2) then
          grid%imid = 3
       else
          grid%imid = -1
       end if
 
+      !
+      ! Initialize logging file
+      !
       log_ = .true.
       if (present(log)) log_ = log
 
@@ -173,18 +192,36 @@ contains
    subroutine dealloc_grid(grid)
       type(lattice_grid), intent(inout) :: grid
       
+      !
       ! close log file
-      close(grid%logunit)
+      !
+      if (grid%log_) then
+         close(grid%logunit)
+      end if
 
-      call dealloc_grid_(grid)
+      !
+      ! nullify pointer components
+      !
+      nullify(grid%uy)
+      nullify(grid%ux)
+      nullify(grid%rho)
+
+      !
+      ! deallocate allocatable storage
+      !
+      call deallocate_all_(grid)
+
    contains
+      
       !> Deallocate all allocatable objects by applying intent(out)
-      subroutine dealloc_grid_(grid)
+      subroutine deallocate_all_(grid)
          type(lattice_grid), intent(out) :: grid
-         ! Trick to prevent spurious warning
+         ! Use an associate to prevent spurious warnings
          associate(nx => grid%nx)
+            return
          end associate
       end subroutine
+   
    end subroutine
 
    subroutine set_properties(grid, nu, dt, magic)
@@ -197,6 +234,7 @@ contains
       grid%nu = nu
       grid%dt = dt
 
+      ! TODO: lattice dependent logic 
       grid%csqr = csqr
       tau = invcsqr*nu
 
@@ -335,169 +373,6 @@ contains
       end subroutine
 
    end subroutine
-
-   subroutine collide_bgk(grid)
-      class(lattice_grid), intent(inout) :: grid
-      integer :: ld
-
-      ld = size(grid%f,1)
-
-#if SPLIT
-      call bgk_kernel_cache(grid%nx, grid%ny, ld, &
-         grid%f(:,:,:,grid%inew), &
-         grid%omega)
-#else
-      call bgk_kernel(grid%nx, grid%ny, ld, &
-         grid%f(:,:,:,grid%inew), &
-         grid%omega)
-#endif
-
-   contains
-
-      subroutine bgk_kernel(nx,ny,ld,f1,omega)
-         integer, intent(in) :: nx, ny, ld
-         real(wp), intent(inout) :: f1(ld,nx,0:8)
-         real(wp), intent(in) :: omega
-
-         real(wp) :: rho, invrho, ux, uy
-         real(wp) :: omegabar
-         real(wp) :: fs(0:8), feq(0:8)
-
-         integer :: x, y
-
-         omegabar = 1.0_wp - omega
-
-      !$omp parallel default(private) shared(f1,omega,omegabar,nx,ny)
-
-         !$omp do collapse(2) schedule(static)
-         do x = 1, nx
-            do y = 1, ny
-
-            ! pull pdfs travelling in different directions
-            fs = f1(y,x,:)
-
-            ! density
-            rho = (((fs(5) + fs(7)) + (fs(6) + fs(8))) + &
-                   ((fs(1) + fs(3)) + (fs(2) + fs(4)))) + fs(0)
-
-            invrho = 1.0_wp/rho
-
-            ! velocity
-            ux = invrho * (((fs(5) - fs(7)) + (fs(8) - fs(6))) + (fs(1) - fs(3)))
-            uy = invrho * (((fs(5) - fs(7)) + (fs(6) - fs(8))) + (fs(2) - fs(4)))
-
-            ! get equilibrium pdfs
-            feq = equilibrium(rho, ux, uy)
-
-            ! collision
-            fs = omegabar*fs + omega*feq
-
-            ! push pdfs to destination array
-            f1(y,x,:) = fs
-
-            end do
-         end do
-         !$omp end do
-
-      !$omp end parallel
-
-      end subroutine bgk_kernel
-
-      subroutine bgk_kernel_cache(nx,ny,ld,f1,omega)
-         integer, intent(in) :: nx,ny,ld
-         real(wp), intent(inout) :: f1(ld,nx,0:8)
-         real(wp), intent(in) :: omega
-
-         real(wp) :: rho(ny), invrho, ux(ny), uy(ny), indp(ny)
-         real(wp) :: fs(0:8)
-         real(wp) :: omegabar, omega_w0, omega_ws, omega_wd
-
-         real(wp), parameter :: one_third = 1.0_wp / 3.0_wp
-
-         real(wp) :: vel_trm_13, vel_trm_24
-         real(wp) :: vel_trm_57, vel_trm_68
-         real(wp) :: velxpy, velxmy
-
-         integer :: x, y
-
-
-      !$omp parallel default(private) shared(f1,omega,nx,ny)
-         
-         omegabar = 1.0_wp - omega
-
-         omega_w0 = 3.0_wp * omega * w0
-         omega_ws = 3.0_wp * omega * ws
-         omega_wd = 3.0_wp * omega * wd
-         
-         !$omp do schedule(static)
-         do x = 1, nx
-
-            do y = 1, ny
-               ! pull pdfs travelling in different directions
-               fs = f1(y,x,:)
-
-               ! density
-               rho(y) = (((fs(5) + fs(7)) + (fs(6) + fs(8))) + &
-                         ((fs(1) + fs(3)) + (fs(2) + fs(4)))) + fs(0)
-
-               invrho = 1.0_wp/rho(y)
-
-               ! velocity
-               ux(y) = invrho * (((fs(5) - fs(7)) + (fs(8) - fs(6))) + (fs(1) - fs(3)))
-               uy(y) = invrho * (((fs(5) - fs(7)) + (fs(6) - fs(8))) + (fs(2) - fs(4)))
-
-               indp(y) = one_third - 0.5_wp * (ux(y)**2 + uy(y)**2)
-
-               ! update direction 0
-               f1(y,x,0) = omegabar*fs(0) + omega_w0*rho(y)*indp(y)
-            end do
-
-            do y = 1, ny
-            
-               vel_trm_13 = indp(y) + 1.5_wp * ux(y) * ux(y)
-
-               f1(y,x,1) = omegabar*f1(y,x,1) + omega_ws * rho(y) * (vel_trm_13 + ux(y))
-               f1(y,x,3) = omegabar*f1(y,x,3) + omega_ws * rho(y) * (vel_trm_13 - ux(y))
-            
-            end do
-
-            do y = 1, ny
-               
-               vel_trm_24 = indp(y) + 1.5_wp * uy(y) * uy(y)
-
-               f1(y,x,2) = omegabar*f1(y,x,2) + omega_ws * rho(y) * (vel_trm_24 + uy(y))
-               f1(y,x,4) = omegabar*f1(y,x,4) + omega_ws * rho(y) * (vel_trm_24 - uy(y))
-            
-            end do
-
-            do y = 1, ny
-
-               velxpy = ux(y) + uy(y)
-               vel_trm_57 = indp(y) + 1.5_wp * velxpy * velxpy
-
-               f1(y,x,5) = omegabar*f1(y,x,5) + omega_wd * rho(y) * (vel_trm_57 + velxpy)
-               f1(y,x,7) = omegabar*f1(y,x,7) + omega_wd * rho(y) * (vel_trm_57 - velxpy)
-            
-            end do
-
-            do y = 1, ny
-               
-               velxmy = ux(y) - uy(y)
-               vel_trm_68 = indp(y) + 1.5_wp * velxmy * velxmy
-               
-               f1(y,x,6) = omegabar*f1(y,x,6) + omega_wd * rho(y) * (vel_trm_68 - velxmy)
-               f1(y,x,8) = omegabar*f1(y,x,8) + omega_wd * rho(y) * (vel_trm_68 + velxmy)
-            
-            end do
-
-         end do
-         !$omp end do
-
-      !$omp end parallel
-
-      end subroutine bgk_kernel_cache
-
-   end subroutine collide_bgk
 
 
    subroutine stream_fvm_bardow(grid)
@@ -1061,6 +936,7 @@ contains
       fullname = fullname // grid%filename // trim(istr) // '.vtk'
 
       if (binary_) then
+         print *, "binary output not implemented"
          return
       else
          !call output_vtk_grid_ascii(fullname,grid%nx,grid%ny, &
@@ -1072,17 +948,27 @@ contains
 
    end subroutine
 
-   subroutine set_output_folder(grid,foldername)
+   subroutine set_output_folder(grid,foldername,verbose)
       class(lattice_grid), intent(inout) :: grid
-      character(len=*) :: foldername
+      character(len=*), intent(in) :: foldername
+      logical, intent(in), optional :: verbose
 
       integer :: istat
+      character(len=:), allocatable :: mkdir_opts
 
-      call execute_command_line("mkdir -p "//trim(foldername), &
+      mkdir_opts = '-p'
+      if (present(verbose)) then
+         if (verbose) then
+            mkdir_opts = mkdir_opts // 'v'
+         end if
+      end if
+
+      call execute_command_line( &
+         'mkdir ' // mkdir_opts // ' ' // trim(foldername), &
          exitstat=istat, wait=.true.)
 
       if (istat /= 0) then
-         write(*,'(A)') "[set_output_folder] error creating directory "//grid%foldername
+         write(*,'(A)') "[set_output_folder] error making directory "//grid%foldername
          error stop
       end if
 
