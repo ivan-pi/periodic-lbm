@@ -20,22 +20,23 @@ void c_output_vtk_polydata(
   vtkfile << "POINTS " << n << " float\n";
   
   for (int i = 0; i < n; i++) {
-    vtkfile << p[i][0] << " " << p[i][1] << " 0\n";
+    const double *p_ = &p[2*i];
+    vtkfile << p_[0] << " " << p_[1] << " 0\n";
   }
 
-  vtkfile << "POINT_DATA " << n << "\n";
+  vtkfile << "POINT_DATA " << n << '\n';
 
-  vtkfile << "VECTORS velocity float\n";
+  vtkfile << "VECTORS Velocity float\n";
 
   for (int i = 0; i < n; i++) {
     vtkfile << ux[0] << " " << uy[1] << " 0\n";
   }
 
-  vtkfile << "SCALARS rho float 1\n";
+  vtkfile << "SCALARS Density float 1\n";
   vtkfile << "LOOKUP_TABLE default\n";
 
   for (int i = 0; i < n; i++) {
-    vtkfile << rho[i] << "\n";
+    vtkfile << rho[i] << '\n';
   }
 
   vtkfile.close();

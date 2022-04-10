@@ -8,6 +8,10 @@ module collision_bgk
 
    public :: collide_bgk
 
+   real(wp), parameter :: w0 = 4._wp / 9._wp, &
+                          ws = 1._wp / 9._wp, &
+                          wd = 1._wp / 36._wp
+                          
 contains
 
    subroutine collide_bgk(grid)
@@ -172,3 +176,5 @@ contains
       end subroutine bgk_kernel_cache
 
    end subroutine collide_bgk
+
+end module

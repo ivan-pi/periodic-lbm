@@ -67,7 +67,7 @@ contains
          real(wp), intent(in) :: lambda_e, lambda_d
 
          
-         real(wp) :: rho, invrho, velX, velY
+         real(wp) :: rho, velX, velY
 
          ! relaxation parameter variables
          real(wp) :: lambda_e_scaled, lambda_d_scaled

@@ -20,23 +20,23 @@ contains
    subroutine output_gnuplot_grid(filename,nx,ny,rho,ux,uy)
       character(len=*), intent(in) :: filename
       integer, intent(in) :: nx, ny
-      real(wp), intent(in) :: rho(ny,nx), ux(ny,nx), ux(ny,nx)
+      real(wp), intent(in) :: rho(ny,nx), ux(ny,nx), uy(ny,nx)
 
       integer :: unit, x, y
-      real(wp) :: xx, yy
+      real(wp) :: rx, ry
 
       open(newunit=unit,file=filename)
 
-      do x = 1, grid%nx
-         xx = (x - 1) + 0.5_wp
-         do y = 1, grid%ny
-            yy = (y - 1) + 0.5_wp
-            write(unit,'(5('//FMT_REAL//',:,1X))') xx, yy, grid%rho(y,x), grid%ux(y,x), grid%uy(y,x)
+      do x = 1, nx
+         rx = (x - 1) + 0.5_wp
+         do y = 1, ny
+            rx = (y - 1) + 0.5_wp
+            write(unit,'(5('//FMT_REAL//',:,1X))') rx, ry, rho(y,x), ux(y,x), uy(y,x)
          end do
          write(unit,*)
       end do
 
       close(unit)
    end subroutine
-   
+
 end module

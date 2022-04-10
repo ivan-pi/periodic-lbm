@@ -1,12 +1,11 @@
-program main
+program main_taylor_green
 
    use fvm_bardow
    use taylor_green, only: taylor_green_t, pi
+   use collision_bgk, only: collide_bgk
    use collision_trt, only: collide_trt
    ! use collision_bgk_improved, only: collide_bgk_improved
    use collision_regularized, only: collide_rr
-   use twostep_tg, only: stream_ttg4a
-   use twostep_dugks, only: stream_dugks
    !use periodic_dugks
    use periodic_lbm, only: perform_lbm_step, lbm_stream
 
@@ -89,7 +88,7 @@ program main
    t = 0._wp
    call apply_initial_condition(tg, grid)
 
-   call output_grid_txt(grid,step=0)
+   call output_gnuplot(grid,step=0)
    call output_vtk(grid,step=0)
    
    call grid%logger(step=0)
@@ -105,14 +104,14 @@ program main
          print *, "step = ", step
          call update_macros(grid)
          print *, maxval(hypot(grid%ux,grid%uy)), minval(hypot(grid%ux,grid%uy))
-         call output_grid_txt(grid,step)
+         call output_gnuplot(grid,step)
          call output_vtk(grid,step)
          call grid%logger(step)
       end if
 
       if (t >= tmax) then
          call update_macros(grid)
-         call output_grid_txt(grid,step)
+         call output_gnuplot(grid,step)
          call output_vtk(grid,step)
          call grid%logger(step)
          exit time

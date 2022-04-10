@@ -19,11 +19,11 @@ module fvm_bardow
    
    public :: update_macros
    
-   public :: output_grid_txt, output_vtk
+   public :: output_gnuplot, output_vtk
 
    public :: set_pdf_to_equilibrium
+   public :: equilibrium
 
-   public :: collide_bgk
    public :: stream_fdm_bardow
    public :: stream_fvm_bardow
    public :: stream_fdm_sofonea
@@ -158,9 +158,7 @@ contains
       !
       ! Associate pointer components
       !
-      grid%rho => grid%mf(:,:,1)
-      grid%ux  => grid%mf(:,:,2)
-      grid%uy  => grid%mf(:,:,3)
+      call establish_macro_pointers(grid)
 
       !
       ! Initialize field pointers
@@ -187,15 +185,27 @@ contains
          open(newunit=grid%logunit,file=logfile_,status='unknown')
       end if
 
+   contains
+
+      subroutine establish_macro_pointers(this)
+         type(lattice_grid), intent(inout), target :: this
+         this%rho => this%mf(:,:,1)
+         this%ux  => this%mf(:,:,2)
+         this%uy  => this%mf(:,:,3)
+      end subroutine
+
    end subroutine
 
    subroutine dealloc_grid(grid)
       type(lattice_grid), intent(inout) :: grid
       
+      logical :: isopen
+
       !
       ! close log file
       !
-      if (grid%log_) then
+      inquire(grid%logunit,opened=isopen)
+      if (isopen) then
          close(grid%logunit)
       end if
 
@@ -883,8 +893,7 @@ contains
 
       character(len=64) :: istr
       character(len=:), allocatable :: fullname
-      integer :: unit, istat, x, y
-      real(wp) :: xx, yy
+      integer :: istat
 
       istr = ''
       if (present(step)) then

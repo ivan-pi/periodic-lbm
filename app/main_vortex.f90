@@ -5,12 +5,10 @@ program main
 
    use barotropic_vortex_case, only: vortex_case_t
 
+   use collision_bgk, only: collide_bgk
    use collision_trt, only: collide_trt
    ! use collision_bgk_improved, only: collide_bgk_improved
    use collision_regularized, only: collide_rr
-   use twostep_tg, only: stream_ttg4a
-   use twostep_dugks, only: stream_dugks
-   !use periodic_dugks
    use periodic_lbm, only: perform_lbm_step, lbm_stream
 
    !$ use omp_lib, only: omp_get_wtime
@@ -102,7 +100,7 @@ program main
 
    call apply_initial_condition(case, grid)
 
-   call output_grid_txt(grid,step=0)
+   call output_gnuplot(grid,step=0)
    call output_vtk(grid,step=0)
    
    call grid%logger(step=0)
@@ -118,7 +116,7 @@ program main
       if (mod(step,nprint) == 0) then
          print *, "step = ", step
          call update_macros(grid)
-         call output_grid_txt(grid,step)
+         call output_gnuplot(grid,step)
          call output_vtk(grid,step)
          call grid%logger(step)
       end if
