@@ -3,13 +3,18 @@ program main
    use fvm_bardow
    use taylor_green, only: taylor_green_t, pi
    use collision_trt, only: collide_trt
-   use collision_bgk_improved, only: collide_bgk_improved
+   ! use collision_bgk_improved, only: collide_bgk_improved
+   use collision_regularized, only: collide_rr
+   use twostep_tg, only: stream_ttg4a
+   use twostep_dugks, only: stream_dugks
+   !use periodic_dugks
+   use periodic_lbm, only: perform_lbm_step, lbm_stream
 
    !$ use omp_lib, only: omp_get_wtime
 
    implicit none
 
-   integer, parameter :: nx = 256, ny = 256
+   integer, parameter :: nx = 320, ny = 320
    integer, parameter :: nprint = 20000
    integer :: step, nsteps
 
@@ -27,13 +32,13 @@ program main
    integer, parameter :: dp = kind(1.0d0)
    real(dp) :: sbegin, send
 
-   call alloc_grid(grid, nx, ny)
+   call alloc_grid(grid, nx, ny, nf = 2)
 
    grid%filename = "results"
    call grid%set_output_folder(foldername="taylor_green")
 
-   grid%collision => collide_bgk
-   grid%streaming => stream_fdm_bardow
+   grid%collision => collide_rr
+   grid%streaming => lbm_stream
 
    grid%logger => my_logger
 
@@ -48,13 +53,13 @@ program main
 
    ! read value for dt/tau
    call get_command_argument(1,arg)
+   
    read(arg,*) cfl
-   dt = cfl/sqrt(2.0_wp)
+   dt = cfl
    dt_over_tau = dt/tau
 
    !read(arg,*) dt_over_tau
    !dt = dt_over_tau*tau
-   !cfl = 0.1_wp
    !cfl = sqrt(2._wp)*dt
    
    print *, "tau = ", tau
@@ -77,6 +82,8 @@ program main
 
    tmax = log(2._wp)*tg%decay_time()
    nsteps = int(1.1_wp*tmax/dt)
+   !nsteps = 5000
+
    print*, "nsteps = ", nsteps
 
    t = 0._wp
@@ -91,12 +98,13 @@ program main
 
    time: do step = 1, nsteps
 
-      call perform_step(grid)
+      call perform_lbm_step(grid)
       t = t + dt
 
       if (mod(step,nprint) == 0) then
-         print *, step
+         print *, "step = ", step
          call update_macros(grid)
+         print *, maxval(hypot(grid%ux,grid%uy)), minval(hypot(grid%ux,grid%uy))
          call output_grid_txt(grid,step)
          call output_vtk(grid,step)
          call grid%logger(step)
@@ -173,7 +181,7 @@ contains
       real(wp), allocatable :: pa(:,:), uxa(:,:), uya(:,:)
       real(wp) :: above, below
 
-      allocate(pa, mold=grid%rho) ! not needed
+      allocate(pa,  mold=grid%rho) ! not needed
       allocate(uxa, mold=grid%ux)
       allocate(uya, mold=grid%uy)
 
@@ -182,8 +190,16 @@ contains
                    ux=uxa, &
                    uy=uya)
 
-      above = norm2(hypot(grid%ux-uxa, grid%uy-uya))
-      below = norm2(hypot(uxa, uya))
+      associate(nx => grid%nx, ny => grid%ny)
+
+
+      above = norm2(hypot(&
+         grid%ux(1:ny,1:nx) - uxa(1:ny,1:nx), &
+         grid%uy(1:ny,1:nx) - uya(1:ny,1:nx)))
+      below = norm2(hypot(uxa(1:ny,1:nx), uya(1:ny,1:nx)))
+
+      end associate
+
       nrm = above/below
 
       ! # Code used in the Python version
