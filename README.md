@@ -7,14 +7,18 @@ For actual simulation work take a look at [other codes](/other_codes).
 ## Data layout 
 
 When organizing an LBM code, there are two main choices for the data layout
-- structure of arrays (SoA), and
-- array of structures (AoS)
-The chosen layout has important performance implications. For optimum performance the collision and streaming kernels should be specialized for the chosen layout. 
+- **S**tructure **o**f **A**rrays (SoA), and
+- **A**rray **o**f **S**tructures (AoS)
 
 In the SoA layout, the PDF's pointing in a given direction at different spatial points are stored contiguously. 
 In the AoS layout, the PDF's pointing in different directions at a given spatial point are stored contiguously.
 
+The chosen layout carries large performance implications. For optimum performance the collision and streaming kernels should be specialized for the chosen layout. 
+
+
 ## See also
+
+Some of these libraries may also be used in the future:
 
 - [Medusa](https://e6.ijs.si/medusa/wiki/index.php/Medusa)
 - [Eigen](http://eigen.tuxfamily.org/index.php?title=Main_Page)
@@ -38,4 +42,4 @@ For industrial purpose simulations the following solvers can also be used
 * Altair [ultraFluidX](https://www.altair.com/altair-cfd-capabilities/#lbm) (formerly from FluiDyna GmbH)
 * [ProLB](http://www.prolb-cfd.com/)
 
-A bunch of other (mostly research oriented) codes are described in [the list](https://github.com/sthavishtha/list-lattice-Boltzmann-codes) by @sthavishtha.
+A bunch of other (mostly research oriented) codes are described in [the list](https://github.com/sthavishtha/list-lattice-Boltzmann-codes) by Sthavishtha Bhopalam Rajakumar ([@sthavishtha](https://github.com/sthavishtha)).
