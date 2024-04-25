@@ -1,4 +1,3 @@
-
 program main
 
    use fvm_bardow
@@ -7,7 +6,9 @@ program main
 
    use collision_bgk, only: collide_bgk
    use collision_trt, only: collide_trt
+
    ! use collision_bgk_improved, only: collide_bgk_improved
+
    use collision_regularized, only: collide_rr
    use periodic_lbm, only: perform_lbm_step, lbm_stream
 
@@ -15,7 +16,7 @@ program main
 
    implicit none
 
-   integer, parameter :: nx = 64, ny = 64
+   integer, parameter :: nx = 128, ny = 128
    integer, parameter :: nprint = 10000
    integer :: step, nsteps
 
@@ -40,7 +41,7 @@ program main
    call grid%set_output_folder(foldername="vortex")
 
    grid%collision => collide_bgk
-   grid%streaming => stream_fdm_bardow
+   grid%streaming => stream_fvm_bardow
 
    grid%logger => my_logger
 
@@ -60,18 +61,18 @@ program main
    tau = 3.0_wp * nu 
    tau = 0.0001_wp
 
-   tmax = (real(nx, wp) / U0) * 1.0_wp
+   tmax = (real(nx, wp) / U0) * 4.0_wp
 
    ! read value for dt/tau or cfl
    call get_command_argument(1,arg)
    
-   !read(arg,*) cfl
-   !dt = cfl
-   !dt_over_tau = dt/tau
+   read(arg,*) cfl
+   dt = cfl
+   dt_over_tau = dt/tau
 
-   read(arg,*) dt_over_tau
-   dt = dt_over_tau*tau
-   cfl = dt
+   !read(arg,*) dt_over_tau
+   !dt = dt_over_tau*tau
+   !cfl = dt
    
    print *, "tau = ", tau
    print *, "dt/tau = ", dt/tau
@@ -101,8 +102,9 @@ program main
    call apply_initial_condition(case, grid)
 
    call output_gnuplot(grid,step=0)
+   call output_npy(grid,step=0)
    call output_vtk(grid,step=0)
-   
+
    call grid%logger(step=0)
 
    !$ sbegin = omp_get_wtime()
@@ -117,7 +119,9 @@ program main
          print *, "step = ", step
          call update_macros(grid)
          call output_gnuplot(grid,step)
+         call output_npy(grid,step)
          call output_vtk(grid,step)
+
          call grid%logger(step)
       end if
 

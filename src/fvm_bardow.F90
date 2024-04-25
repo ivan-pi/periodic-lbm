@@ -2,7 +2,9 @@ module fvm_bardow
 
    use precision
    use vtk, only: output_vtk_grid_ascii, output_vtk_structuredPoints
+
    use output_gnuplot, only: output_gnuplot_grid
+   use output_npy, only: output_fluid_npy
 
    implicit none
    private
@@ -19,7 +21,7 @@ module fvm_bardow
    
    public :: update_macros
    
-   public :: output_gnuplot, output_vtk
+   public :: output_gnuplot, output_vtk, output_npy
 
    public :: set_pdf_to_equilibrium
    public :: equilibrium
@@ -125,7 +127,7 @@ contains
 
 
    subroutine alloc_grid(grid,nx,ny,nf,log)
-      type(lattice_grid), intent(out) :: grid
+      type(lattice_grid), intent(out), target :: grid
       
       integer, intent(in) :: nx, ny
       integer, intent(in), optional :: nf
@@ -158,7 +160,10 @@ contains
       !
       ! Associate pointer components
       !
-      call establish_macro_pointers(grid)
+      !call establish_macro_pointers(grid)
+      grid%rho => grid%mf(:,:,1)
+      grid%ux  => grid%mf(:,:,2)
+      grid%uy  => grid%mf(:,:,3)
 
       !
       ! Initialize field pointers
@@ -920,6 +925,40 @@ contains
 
    end subroutine
 
+
+
+   subroutine output_npy(grid, step)
+      type(lattice_grid), intent(in) :: grid
+      integer, intent(in), optional :: step
+
+      character(len=64) :: istr
+      character(len=:), allocatable :: fullname
+      integer :: istat
+
+      istr = ''
+      if (present(step)) then
+         write(istr,'(I0.9)') step
+      end if
+
+      fullname = ''
+      if (allocated(grid%foldername)) then
+         call execute_command_line("mkdir -p "//trim(grid%foldername), &
+            exitstat=istat, wait=.true.)
+
+         if (istat /= 0) then
+            write(*,'(A)') "[output_grid] error making directory "//grid%foldername
+            error stop
+         end if
+         fullname = trim(grid%foldername)
+      end if
+
+      fullname = fullname//'/'//grid%filename//trim(istr)//'.npy'
+      
+      call output_fluid_npy(fullname, &
+         grid%nx, grid%ny, &
+         grid%mf)
+
+   end subroutine
 
    subroutine output_vtk(grid, step, binary)
       type(lattice_grid), intent(in) :: grid

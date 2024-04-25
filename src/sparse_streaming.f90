@@ -75,8 +75,8 @@ contains
 
       integer :: q
 
-      alpha = 1.0_cdouble
-      beta  = 0.0_cdouble
+      alpha = 1.0_c_double
+      beta  = 0.0_c_double
 
       do q = 1, 8
 

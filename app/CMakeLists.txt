@@ -15,3 +15,9 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR}/../src)
 
 ADDEXEC(main_vortex)
 ADDEXEC(main_taylor_green)
+
+include_directories(/home/ivan/local/librsb_gnu/include)
+
+ADDEXEC(main_rsb)
+target_link_directories(main_rsb PUBLIC /home/ivan/local/librsb_gnu/lib)
+target_link_libraries(main_rsb rsb)
