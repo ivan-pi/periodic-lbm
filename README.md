@@ -2,7 +2,7 @@
 
 A personal collection of research codes for lattice Boltzmann methods in periodic 2D domains.
 
-For actual simulation work take a look at [other codes](/other_codes).
+For actual simulation work take a look at [other codes](#other-codes).
 
 ## Data layout 
 
